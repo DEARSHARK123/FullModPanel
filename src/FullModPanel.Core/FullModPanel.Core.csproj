@@ -1,0 +1,7 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Test-only assembly. The loadable mod compiles these sources into FullModPanel.dll. -->
+  <PropertyGroup>
+    <RootNamespace>FullModPanel.Core</RootNamespace>
+    <AssemblyName>FullModPanel.Core</AssemblyName>
+  </PropertyGroup>
+</Project>

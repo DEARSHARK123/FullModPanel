@@ -1,0 +1,92 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>FullModPanel</RootNamespace>
+    <AssemblyName>FullModPanel</AssemblyName>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <EnableDynamicLoading>true</EnableDynamicLoading>
+    <Sts2DataDir Condition="'$(Sts2DataDir)' == ''">$(STS2_DATA_DIR)</Sts2DataDir>
+  </PropertyGroup>
+
+  <!-- Common Steam layouts. STS2_DATA_DIR / -p:Sts2DataDir= wins when set. -->
+  <PropertyGroup Condition="'$(Sts2DataDir)' == '' and Exists('$(HOME)/.steam/steam/steamapps/common/Slay the Spire 2/data_sts2_windows_x86_64/sts2.dll')">
+    <Sts2DataDir>$(HOME)/.steam/steam/steamapps/common/Slay the Spire 2/data_sts2_windows_x86_64</Sts2DataDir>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Sts2DataDir)' == '' and Exists('$(HOME)/.steam/steam/steamapps/common/Slay the Spire 2/data_sts2_linuxbsd_x86_64/sts2.dll')">
+    <Sts2DataDir>$(HOME)/.steam/steam/steamapps/common/Slay the Spire 2/data_sts2_linuxbsd_x86_64</Sts2DataDir>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Sts2DataDir)' == '' and Exists('$(HOME)/.local/share/Steam/steamapps/common/Slay the Spire 2/data_sts2_windows_x86_64/sts2.dll')">
+    <Sts2DataDir>$(HOME)/.local/share/Steam/steamapps/common/Slay the Spire 2/data_sts2_windows_x86_64</Sts2DataDir>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Sts2DataDir)' == '' and Exists('$(HOME)/.local/share/Steam/steamapps/common/Slay the Spire 2/data_sts2_linuxbsd_x86_64/sts2.dll')">
+    <Sts2DataDir>$(HOME)/.local/share/Steam/steamapps/common/Slay the Spire 2/data_sts2_linuxbsd_x86_64</Sts2DataDir>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Sts2DataDir)' == '' and Exists('C:\Program Files (x86)\Steam\steamapps\common\Slay the Spire 2\data_sts2_windows_x86_64\sts2.dll')">
+    <Sts2DataDir>C:\Program Files (x86)\Steam\steamapps\common\Slay the Spire 2\data_sts2_windows_x86_64</Sts2DataDir>
+  </PropertyGroup>
+  <PropertyGroup>
+    <BuildGameMod Condition="'$(BuildGameMod)' == '' and '$(Sts2DataDir)' != '' and Exists('$(Sts2DataDir)/sts2.dll')">true</BuildGameMod>
+    <BuildGameMod Condition="'$(BuildGameMod)' == ''">false</BuildGameMod>
+  </PropertyGroup>
+
+  <!-- STS2 loads only this mod DLL. Compile the classifier into it; do not reference FullModPanel.Core.dll. -->
+  <ItemGroup Condition="'$(BuildGameMod)' == 'true'">
+    <Compile Include="..\FullModPanel.Core\*.cs" Link="Core\%(Filename)%(Extension)" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(BuildGameMod)' != 'true'">
+    <Compile Remove="*.cs" />
+    <Compile Include="BuildSkipped.cs" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(BuildGameMod)' == 'true'">
+    <Compile Remove="BuildSkipped.cs" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(BuildGameMod)' == 'true'">
+    <Reference Include="sts2">
+      <HintPath>$(Sts2DataDir)/sts2.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="0Harmony">
+      <HintPath>$(Sts2DataDir)/0Harmony.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="GodotSharp">
+      <HintPath>$(Sts2DataDir)/GodotSharp.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Steamworks.NET">
+      <HintPath>$(Sts2DataDir)/Steamworks.NET.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="FullModPanel.json" CopyToOutputDirectory="Never" />
+  </ItemGroup>
+
+  <Target Name="WarnWhenGameMissing" BeforeTargets="CoreCompile" Condition="'$(BuildGameMod)' != 'true'">
+    <Warning Text="STS2 assemblies were not found. This build is a placeholder and is not a loadable mod. Set STS2_DATA_DIR to the folder that contains sts2.dll and rebuild; the loadable files are written to artifacts/FullModPanel. Core tests do not need the game." />
+  </Target>
+
+  <Target Name="RequireSts2Assemblies" BeforeTargets="ResolveAssemblyReferences" Condition="'$(BuildGameMod)' == 'true'">
+    <Error
+      Condition="'$(Sts2DataDir)' == '' Or !Exists('$(Sts2DataDir)/sts2.dll') Or !Exists('$(Sts2DataDir)/0Harmony.dll') Or !Exists('$(Sts2DataDir)/GodotSharp.dll') Or !Exists('$(Sts2DataDir)/Steamworks.NET.dll')"
+      Text="FullModPanel compiles against the game assemblies. Set STS2_DATA_DIR, or pass -p:Sts2DataDir=, to the folder that contains sts2.dll, 0Harmony.dll, GodotSharp.dll, and Steamworks.NET.dll (Windows Steam: &quot;Slay the Spire 2/data_sts2_windows_x86_64&quot;). Core unit tests do not need this path." />
+  </Target>
+
+  <Target Name="RejectSeparateCoreAssembly" AfterTargets="ResolveAssemblyReferences" Condition="'$(BuildGameMod)' == 'true'">
+    <ItemGroup>
+      <_CoreRef Include="@(ReferencePath)" Condition="'%(Filename)' == 'FullModPanel.Core'" />
+    </ItemGroup>
+    <Error Condition="'@(_CoreRef)' != ''" Text="FullModPanel.dll must not reference FullModPanel.Core.dll. STS2 only loads the manifest DLL; the Core sources are compiled into this assembly." />
+  </Target>
+
+  <Target Name="StageMod" AfterTargets="Build" Condition="'$(BuildGameMod)' == 'true'">
+    <PropertyGroup>
+      <_StageDir>$(MSBuildThisFileDirectory)..\..\artifacts\FullModPanel\</_StageDir>
+    </PropertyGroup>
+    <Delete Files="$(TargetDir)FullModPanel.Core.dll;$(TargetDir)FullModPanel.Core.pdb;$(_StageDir)FullModPanel.Core.dll;$(_StageDir)FullModPanel.Core.pdb" />
+    <MakeDir Directories="$(_StageDir)" />
+    <Copy SourceFiles="$(TargetPath);$(MSBuildThisFileDirectory)FullModPanel.json" DestinationFolder="$(_StageDir)" SkipUnchangedFiles="true" />
+  </Target>
+</Project>
