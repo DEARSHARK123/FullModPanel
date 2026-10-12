@@ -65,7 +65,7 @@ public class ClassifierTests
     [Fact]
     public void ToolsAndApisWithoutADependentIsNotALibrary()
     {
-        var panel = Of(ModClassifier.ClassifyAll([Sample("FullModPanel", "完整版模组面板", affectsGameplay: false, tags: ["Tools & APIs"])]), "FullModPanel");
+        var panel = Of(ModClassifier.ClassifyAll([Sample("FullModPanel", "更好的模组面板 Better Mod Panel", affectsGameplay: false, tags: ["Tools & APIs"])]), "FullModPanel");
         Assert.Equal(ModGroup.LocalOnly, panel.Group);
         Assert.Equal(ModKind.Tool, panel.Kind);
         Assert.False(panel.SyncRequired);

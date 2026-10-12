@@ -7,6 +7,11 @@ namespace FullModPanel;
 /// It points right when collapsed and turns a quarter turn to point down when expanded.
 /// It ignores the mouse; the parent button receives the clicks.
 /// </summary>
+/// <remarks>
+/// Drawing goes through the <c>draw</c> signal, not a <c>_Draw</c> override. The mod is
+/// compiled without Godot's source generator, so C# virtual overrides such as <c>_Draw</c>
+/// are never called, and the triangle would stay invisible.
+/// </remarks>
 internal sealed class ExpandArrow : Control
 {
     private const float ArrowSize = 14f;
@@ -30,6 +35,7 @@ internal sealed class ExpandArrow : Control
         OffsetTop = -ArrowSize / 2f;
         OffsetRight = ArrowSize / 2f;
         OffsetBottom = ArrowSize / 2f;
+        Connect(CanvasItem.SignalName.Draw, Callable.From(DrawTriangle));
     }
 
     public void SetColor(Color color)
@@ -62,7 +68,7 @@ internal sealed class ExpandArrow : Control
             .SetEase(Tween.EaseType.Out);
     }
 
-    public override void _Draw()
+    private void DrawTriangle()
     {
         var points = new[]
         {
@@ -73,4 +79,3 @@ internal sealed class ExpandArrow : Control
         DrawColoredPolygon(points, _color);
     }
 }
-

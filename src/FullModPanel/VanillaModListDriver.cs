@@ -62,6 +62,7 @@ internal sealed class VanillaModListDriver : Node
     private bool _layingOut;
     private ulong[] _requestedIds = [];
     private LocManager.LocaleChangeCallback? _localeCallback;
+    private bool _exitHooked;
 
     public static void NoteSelection(NModdingScreen screen, NModMenuRow row) =>
         screen.GetNodeOrNull<VanillaModListDriver>("FullModPanelDriver")?.Remember(row);
@@ -91,6 +92,12 @@ internal sealed class VanillaModListDriver : Node
         else
         {
             RefreshChrome();
+        }
+
+        if (!_exitHooked)
+        {
+            Connect(Node.SignalName.TreeExiting, Callable.From(OnTreeExiting));
+            _exitHooked = true;
         }
 
         _localeCallback ??= Sts2Language.Subscribe(OnLocaleChanged);
@@ -247,12 +254,15 @@ internal sealed class VanillaModListDriver : Node
         FitChrome();
     }
 
-    public override void _ExitTree()
+    /// <summary>
+    /// Runs when the driver leaves the tree. This is a signal, not a <c>_ExitTree</c> override,
+    /// because the mod has no Godot source generator and overrides are never called.
+    /// </summary>
+    private void OnTreeExiting()
     {
         StopPolling();
         Sts2Language.Unsubscribe(_localeCallback);
         _localeCallback = null;
-        base._ExitTree();
     }
 
     private void BuildChrome()
