@@ -6,7 +6,7 @@ Slay the Spire 2 早期体验模组。在主菜单 **设置 → 模组**（英�
 
 ## 安装
 
-不依赖 BaseLib，也不需要 Godot。可装进游戏的文件只有 `artifacts/FullModPanel/` 里的 `FullModPanel.dll` 和 `FullModPanel.json`。分类逻辑已经编进这一个 dll，游戏不会加载旁边的 `FullModPanel.Core.dll`。步骤见下面的「本机出包 / 装测」。
+不依赖 BaseLib，也不需要 Godot。可装进游戏的文件是 `artifacts/FullModPanel/` 里的 `FullModPanel.dll`、`FullModPanel.json` 和 `mod_image.png`（工坊/游戏内卡片图）。分类逻辑已经编进这一个 dll，游戏不会加载旁边的 `FullModPanel.Core.dll`。步骤见下面的「本机出包 / 装测」。
 
 ## 怎么用
 
@@ -109,11 +109,12 @@ export STS2_DATA_DIR="$HOME/.steam/steam/steamapps/common/Slay the Spire 2/data_
 dotnet build src/FullModPanel/FullModPanel.csproj
 ```
 
-macOS 把 `export` 里的路径换成上面的 `data_sts2_macos_arm64`。成功后只使用这两个文件：
+macOS 把 `export` 里的路径换成上面的 `data_sts2_macos_arm64`。成功后使用这三个文件：
 
 ```text
 artifacts/FullModPanel/FullModPanel.dll
 artifacts/FullModPanel/FullModPanel.json
+artifacts/FullModPanel/mod_image.png
 ```
 
 没设 `STS2_DATA_DIR`、或该目录里没有 `sts2.dll` 时，构建只会警告，并在 `src/FullModPanel/bin/` 留下不能装进游戏的占位程序集，**不会**写出 `artifacts/FullModPanel/`。不要拷贝 `bin/`、`.deps.json` 或 `.pdb`。
@@ -124,16 +125,18 @@ artifacts/FullModPanel/FullModPanel.json
 dotnet test FullModPanel.sln
 ```
 
-装进 `mods/FullModPanel/` 的只有这两个文件，不要额外的 json，也不要 `FullModPanel.Core.dll`。目录里如果还留着以前的 Core dll，删掉。
+装进 `mods/FullModPanel/` 的是这三个文件，不要额外的 json，也不要 `FullModPanel.Core.dll`。目录里如果还留着以前的 Core dll，删掉。
 
 ```text
 Windows / Linux:
 <游戏目录>/mods/FullModPanel/FullModPanel.dll
 <游戏目录>/mods/FullModPanel/FullModPanel.json
+<游戏目录>/mods/FullModPanel/mod_image.png
 
 macOS（在 .app 里，不在 Resources）:
 SlayTheSpire2.app/Contents/MacOS/mods/FullModPanel/FullModPanel.dll
 SlayTheSpire2.app/Contents/MacOS/mods/FullModPanel/FullModPanel.json
+SlayTheSpire2.app/Contents/MacOS/mods/FullModPanel/mod_image.png
 ```
 
 完全退出游戏后再启动。若出现官方的模组加载确认，同意后要再完全退出并重新启动一次。然后：主菜单 → 设置 → 模组（英文界面是 Modding）。左栏蓝框顶部是搜索和全选 / 反选，列表按三个分组分开，行仍是原版图标和金色勾选。右栏仍是原版详情。

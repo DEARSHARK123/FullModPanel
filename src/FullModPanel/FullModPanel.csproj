@@ -87,6 +87,6 @@
     </PropertyGroup>
     <Delete Files="$(TargetDir)FullModPanel.Core.dll;$(TargetDir)FullModPanel.Core.pdb;$(_StageDir)FullModPanel.Core.dll;$(_StageDir)FullModPanel.Core.pdb" />
     <MakeDir Directories="$(_StageDir)" />
-    <Copy SourceFiles="$(TargetPath);$(MSBuildThisFileDirectory)FullModPanel.json" DestinationFolder="$(_StageDir)" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="$(TargetPath);$(MSBuildThisFileDirectory)FullModPanel.json;$(MSBuildThisFileDirectory)mod_image.png" DestinationFolder="$(_StageDir)" SkipUnchangedFiles="true" />
   </Target>
 </Project>
