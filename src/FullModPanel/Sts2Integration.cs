@@ -1,4 +1,5 @@
 using FullModPanel.Core;
+using Godot;
 using MegaCrit.Sts2.Core.Logging;
 using MegaCrit.Sts2.Core.Modding;
 using MegaCrit.Sts2.Core.Saves;
@@ -211,4 +212,26 @@ internal sealed class Sts2EnableStore : IModEnableStore
     }
 
     private readonly record struct PlannedChange(List<SettingsSaveMod> Matches, Mod? Created, bool Enabled);
+}
+
+internal static class Sts2ModOverrides
+{
+    public static IReadOnlyList<ModOverride> Read()
+    {
+        try
+        {
+            var path = ProjectSettings.GlobalizePath("user://FullModPanel/overrides.json");
+            if (!File.Exists(path))
+            {
+                return [];
+            }
+
+            return ModOverrideParser.Parse(File.ReadAllText(path));
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"FullModPanel could not read overrides.json: {ex.Message}");
+            return [];
+        }
+    }
 }

@@ -6,10 +6,24 @@ public enum BulkAction
     Invert,
 }
 
-public sealed record RowSnapshot(string Key, bool Enabled, bool CanPersist, string InGameName, string? WorkshopTitle, string SwatchHex);
+public sealed record RowSnapshot(
+    string Key,
+    bool Enabled,
+    bool CanPersist,
+    string Title,
+    string Subtitle,
+    ModGroup Group,
+    bool SyncRequired,
+    ModKind Kind,
+    int Depth,
+    string? ParentKey,
+    string? ExtendsTitle,
+    IReadOnlyList<string> Reasons,
+    int ExtensionCount,
+    int ExtensionsEnabled);
 
-public sealed record CategoryBlockSnapshot(
-    ModCategory Category,
+public sealed record GroupBlockSnapshot(
+    ModGroup Group,
     string DisplayName,
     string SwatchHex,
     int Selected,
@@ -21,118 +35,83 @@ public sealed record PanelSnapshot(
     string Query,
     bool BulkEnabled,
     bool NoHits,
-    IReadOnlyList<CategoryBlockSnapshot> Blocks);
+    IReadOnlyList<GroupBlockSnapshot> Blocks);
 
 public sealed class ModPanelSession
 {
     private readonly IModEnableStore _store;
+    private readonly IReadOnlyList<ModOverride> _overrides;
     private List<ModFacts> _mods;
 
-    private ModPanelSession(IReadOnlyList<ModFacts> mods, IModEnableStore store, string query)
+    private ModPanelSession(
+        IReadOnlyList<ModFacts> mods,
+        IModEnableStore store,
+        IReadOnlyList<ModOverride>? overrides,
+        string query)
     {
         _mods = mods.ToList();
         _store = store;
+        _overrides = overrides ?? [];
         Query = query;
     }
 
     public string Query { get; private set; }
 
-    public static ModPanelSession Create(IReadOnlyList<ModFacts> mods, IModEnableStore store) =>
-        new(mods, store, "");
+    public static ModPanelSession Create(
+        IReadOnlyList<ModFacts> mods,
+        IModEnableStore store,
+        IReadOnlyList<ModOverride>? overrides = null) =>
+        new(mods, store, overrides, "");
 
     public void SetQuery(string? query) => Query = query ?? "";
 
-    public PanelSnapshot Snapshot()
-    {
-        var classified = ModClassifier.ClassifyAll(_mods);
-        var visible = new List<(ClassifiedMod Mod, string? Workshop)>();
-        foreach (var item in classified)
-        {
-            var workshop = ModClassifier.SecondaryWorkshopName(item.Facts.InGameName, item.Facts.WorkshopTitle);
-            if (!ModClassifier.MatchesQuery(Query, item.Facts.InGameName, item.Facts.WorkshopTitle))
-            {
-                continue;
-            }
-
-            visible.Add((item, workshop));
-        }
-
-        var blocks = new List<CategoryBlockSnapshot>();
-        foreach (var category in ModCategoryDisplay.Order)
-        {
-            var rows = new List<RowSnapshot>();
-            foreach (var (mod, workshop) in visible)
-            {
-                if (mod.Category != category)
-                {
-                    continue;
-                }
-
-                rows.Add(new RowSnapshot(
-                    mod.Facts.Key,
-                    mod.Facts.Enabled,
-                    mod.Facts.CanPersist,
-                    mod.Facts.InGameName,
-                    workshop,
-                    ModCategoryDisplay.ColorHex(category)));
-            }
-
-            if (rows.Count == 0)
-            {
-                continue;
-            }
-
-            var selected = 0;
-            foreach (var row in rows)
-            {
-                if (row.Enabled)
-                {
-                    selected++;
-                }
-            }
-
-            blocks.Add(new CategoryBlockSnapshot(
-                category,
-                ModCategoryDisplay.Name(category),
-                ModCategoryDisplay.ColorHex(category),
-                selected,
-                rows.Count,
-                rows.Count > 0,
-                rows));
-        }
-
-        var any = blocks.Count > 0;
-        return new PanelSnapshot(Query, any, !any, blocks);
-    }
+    public PanelSnapshot Snapshot() => Build(Query);
 
     public string? TrySet(string key, bool enabled)
     {
-        var mod = Find(key);
-        if (mod is null)
+        if (Find(key) is null)
         {
             return "找不到这个模组。";
         }
 
-        if (!mod.CanPersist)
+        var rows = Build("").Blocks.SelectMany(block => block.Rows).ToList();
+        var row = rows.FirstOrDefault(candidate => candidate.Key == key);
+        if (row is null)
+        {
+            return "找不到这个模组。";
+        }
+
+        if (!row.CanPersist)
         {
             return "该模组缺少 Manifest ID，无法保存设置。";
         }
 
-        if (mod.Enabled == enabled)
+        var targets = new List<RowSnapshot> { row };
+        if (row.ExtensionCount > 0)
         {
-            return null;
+            targets.AddRange(rows.Where(candidate => candidate.Depth > 0 && candidate.ParentKey == key));
         }
 
-        return Commit([new ModEnableChange(key, enabled)]);
+        var changes = new List<ModEnableChange>();
+        foreach (var target in targets)
+        {
+            if (!target.CanPersist || target.Enabled == enabled)
+            {
+                continue;
+            }
+
+            changes.Add(new ModEnableChange(target.Key, enabled));
+        }
+
+        return Commit(changes);
     }
 
-    public string? TryBulk(BulkAction action, ModCategory? category)
+    public string? TryBulk(BulkAction action, ModGroup? group)
     {
-        var snapshot = Snapshot();
         var rows = new List<RowSnapshot>();
-        foreach (var block in snapshot.Blocks)
+        foreach (var block in Snapshot().Blocks)
         {
-            if (category is not null && block.Category != category.Value)
+            if (group is not null && block.Group != group.Value)
             {
                 continue;
             }
@@ -175,6 +154,164 @@ public sealed class ModPanelSession
         return skipped > 0 ? "有模组缺少 manifest id，已跳过。" : null;
     }
 
+    private PanelSnapshot Build(string query)
+    {
+        var classified = ModClassifier.ClassifyAll(_mods, _overrides);
+        var visible = new List<ClassifiedMod>();
+        foreach (var item in classified)
+        {
+            if (ModClassifier.MatchesQuery(query, item.Facts))
+            {
+                visible.Add(item);
+            }
+        }
+
+        var visibleKeys = visible.Select(item => item.Facts.Key).ToHashSet(StringComparer.Ordinal);
+        var placed = new List<Placed>(visible.Count);
+        foreach (var item in visible)
+        {
+            var parentVisible = item.ParentKey is not null && visibleKeys.Contains(item.ParentKey);
+            var depth = parentVisible ? item.Depth : 0;
+            placed.Add(new Placed(item, depth, depth > 0 ? item.ParentKey : null));
+        }
+
+        var blocks = new List<GroupBlockSnapshot>();
+        foreach (var group in ModGroupDisplay.Order)
+        {
+            var members = new List<Placed>();
+            for (var index = 0; index < placed.Count; index++)
+            {
+                if (placed[index].Item.Group == group)
+                {
+                    members.Add(placed[index]);
+                }
+            }
+
+            if (members.Count == 0)
+            {
+                continue;
+            }
+
+            var ordered = group == ModGroup.Library
+                ? members
+                    .Select((member, index) => (member, index))
+                    .OrderByDescending(pair => pair.member.Item.SyncRequired)
+                    .ThenBy(pair => pair.index)
+                    .Select(pair => pair.member)
+                    .ToList()
+                : TreeOrder(members);
+            var counts = new Dictionary<string, (int Count, int Enabled)>(StringComparer.Ordinal);
+            foreach (var member in ordered)
+            {
+                if (member.Depth == 0 || member.ParentKey is null)
+                {
+                    continue;
+                }
+
+                counts.TryGetValue(member.ParentKey, out var current);
+                counts[member.ParentKey] = (current.Count + 1, current.Enabled + (member.Item.Facts.Enabled ? 1 : 0));
+            }
+
+            var rows = new List<RowSnapshot>(ordered.Count);
+            foreach (var member in ordered)
+            {
+                counts.TryGetValue(member.Item.Facts.Key, out var extensions);
+                rows.Add(new RowSnapshot(
+                    member.Item.Facts.Key,
+                    member.Item.Facts.Enabled,
+                    member.Item.Facts.CanPersist,
+                    member.Item.Title,
+                    member.Item.Subtitle,
+                    member.Item.Group,
+                    member.Item.SyncRequired,
+                    member.Item.Kind,
+                    member.Depth,
+                    member.ParentKey,
+                    member.Item.ExtendsTitle,
+                    member.Item.Reasons,
+                    extensions.Count,
+                    extensions.Enabled));
+            }
+
+            var selected = 0;
+            foreach (var row in rows)
+            {
+                if (row.Enabled)
+                {
+                    selected++;
+                }
+            }
+
+            blocks.Add(new GroupBlockSnapshot(
+                group,
+                ModGroupDisplay.Name(group),
+                ModGroupDisplay.ColorHex(group),
+                selected,
+                rows.Count,
+                rows.Count > 0,
+                rows));
+        }
+
+        var any = blocks.Count > 0;
+        return new PanelSnapshot(query, any, !any, blocks);
+    }
+
+    private static List<Placed> TreeOrder(List<Placed> members)
+    {
+        var children = new Dictionary<string, List<Placed>>(StringComparer.Ordinal);
+        foreach (var member in members)
+        {
+            if (member.Depth == 0 || member.ParentKey is null)
+            {
+                continue;
+            }
+
+            if (!children.TryGetValue(member.ParentKey, out var list))
+            {
+                list = [];
+                children[member.ParentKey] = list;
+            }
+
+            list.Add(member);
+        }
+
+        var ordered = new List<Placed>(members.Count);
+        var emitted = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var member in members)
+        {
+            if (member.Depth > 0)
+            {
+                continue;
+            }
+
+            Emit(member);
+        }
+
+        foreach (var member in members)
+        {
+            Emit(member);
+        }
+
+        return ordered;
+
+        void Emit(Placed member)
+        {
+            if (!emitted.Add(member.Item.Facts.Key))
+            {
+                return;
+            }
+
+            ordered.Add(member);
+            if (children.TryGetValue(member.Item.Facts.Key, out var kids))
+            {
+                foreach (var kid in kids)
+                {
+                    Emit(kid);
+                }
+            }
+        }
+    }
+
     private string? Commit(IReadOnlyList<ModEnableChange> changes)
     {
         if (changes.Count == 0)
@@ -204,4 +341,6 @@ public sealed class ModPanelSession
 
         return null;
     }
+
+    private readonly record struct Placed(ClassifiedMod Item, int Depth, string? ParentKey);
 }

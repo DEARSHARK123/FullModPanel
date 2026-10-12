@@ -1,12 +1,23 @@
+using System.Text;
 using System.Text.RegularExpressions;
 
 namespace FullModPanel.Core;
 
-public sealed record ClassifiedMod(ModFacts Facts, ModCategory Category);
+public sealed record ClassifiedMod(
+    ModFacts Facts,
+    ModGroup Group,
+    ModKind Kind,
+    bool SyncRequired,
+    string Title,
+    string Subtitle,
+    int Depth,
+    string? ParentKey,
+    string? ExtendsTitle,
+    IReadOnlyList<string> Reasons);
 
 /// <summary>
-/// Classifies STS2 mods. Low confidence and conflicting signals become <see cref="ModCategory.Unknown"/>.
-/// Nothing is dropped: <see cref="ClassifyAll"/> returns one result per input.
+/// Groups mods into 依赖库 / 角色 / 玩法 / 内容 / 皮肤 and attaches extensions.
+/// A library is never a parent. Overrides may replace subtype and parent, never the group.
 /// </summary>
 public static partial class ModClassifier
 {
@@ -14,155 +25,146 @@ public static partial class ModClassifier
     {
         "BaseLib",
         "RitsuLib",
+        "STS2-RitsuLib",
         "ModManagerSettings",
         "ModConfig",
     };
 
-    [Flags]
-    private enum Signal
-    {
-        None = 0,
-        Content = 1,
-        Qol = 2,
-        Balance = 4,
-        Debug = 8,
-    }
-
-    private readonly record struct Term(Signal Signal, string Text, bool AsciiWord, bool Weak);
-
-    private static readonly Term[] Terms =
+    private static readonly string[] ContentTags =
     [
-        new(Signal.Content, "卡牌", false, false),
-        new(Signal.Content, "角色", false, false),
-        new(Signal.Content, "遗物", false, false),
-        new(Signal.Content, "药水", false, false),
-        new(Signal.Content, "敌人", false, false),
-        new(Signal.Content, "事件", false, false),
-        new(Signal.Content, "character", true, false),
-        new(Signal.Content, "relic", true, false),
-        new(Signal.Content, "potion", true, false),
-        new(Signal.Content, "encounter", true, false),
-        new(Signal.Content, "enemy", true, false),
-        new(Signal.Content, "card", true, false),
-        new(Signal.Qol, "界面", false, false),
-        new(Signal.Qol, "显示", false, false),
-        new(Signal.Qol, "外观", false, false),
-        new(Signal.Qol, "qol", true, false),
-        new(Signal.Qol, "hud", true, false),
-        new(Signal.Qol, "tooltip", true, false),
-        new(Signal.Qol, "cosmetic", true, false),
-        new(Signal.Qol, "ui", true, false),
-        new(Signal.Qol, "quality of life", false, false),
-        new(Signal.Balance, "balance", true, false),
-        new(Signal.Balance, "平衡", false, false),
-        new(Signal.Balance, "削弱", false, false),
-        new(Signal.Balance, "加强", false, false),
-        new(Signal.Balance, "nerf", true, false),
-        new(Signal.Balance, "buff", true, false),
-        new(Signal.Balance, "rebalance", true, false),
-        new(Signal.Balance, "rework", true, false),
-        new(Signal.Debug, "调试", false, false),
-        new(Signal.Debug, "debug", true, false),
-        new(Signal.Debug, "console", true, false),
-        new(Signal.Debug, "logger", true, false),
-        new(Signal.Debug, "inspector", true, false),
-        new(Signal.Debug, "工具", false, true),
-        new(Signal.Debug, "tool", true, true),
-        new(Signal.Debug, "utility", true, true),
+        "Characters",
+        "Cards",
+        "Relics",
+        "Potions",
+        "Monsters",
+        "Events",
+        "Ancients",
+        "Acts",
+        "Rooms",
+        "Expansion",
     ];
 
-    public static IReadOnlyList<ClassifiedMod> ClassifyAll(IReadOnlyList<ModFacts> mods)
+    private const string Separators = ":：-—·~ ";
+
+    public static IReadOnlyList<ClassifiedMod> ClassifyAll(
+        IReadOnlyList<ModFacts> mods,
+        IReadOnlyList<ModOverride>? overrides = null)
     {
-        var dependents = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        var byId = new Dictionary<string, ModFacts>(StringComparer.OrdinalIgnoreCase);
+        foreach (var mod in mods)
+        {
+            if (!string.IsNullOrWhiteSpace(mod.Id))
+            {
+                byId.TryAdd(mod.Id, mod);
+            }
+        }
+
+        var dependents = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var mod in mods)
         {
             foreach (var dependencyId in mod.DependencyIds)
             {
-                if (string.IsNullOrWhiteSpace(dependencyId))
+                if (string.IsNullOrWhiteSpace(dependencyId)
+                    || dependencyId.Equals(mod.Id, StringComparison.OrdinalIgnoreCase))
                 {
                     continue;
                 }
 
-                if (string.Equals(dependencyId, mod.Id, StringComparison.OrdinalIgnoreCase))
-                {
-                    continue;
-                }
-
-                dependents.TryGetValue(dependencyId, out var count);
-                dependents[dependencyId] = count + 1;
+                dependents.Add(dependencyId);
             }
         }
 
-        var classified = new List<ClassifiedMod>(mods.Count);
+        var overrideById = new Dictionary<string, ModOverride>(StringComparer.OrdinalIgnoreCase);
+        if (overrides is not null)
+        {
+            foreach (var entry in overrides)
+            {
+                if (!string.IsNullOrWhiteSpace(entry.Id))
+                {
+                    overrideById[entry.Id] = entry;
+                }
+            }
+        }
+
+        var groups = new Dictionary<string, ModGroup>(StringComparer.Ordinal);
+        var assigned = new List<(ModFacts Facts, ModGroup Group, ModKind Kind, string Reason)>(mods.Count);
         foreach (var mod in mods)
         {
-            dependents.TryGetValue(mod.Id, out var dependedUponBy);
-            classified.Add(new ClassifiedMod(mod, Classify(mod, dependedUponBy)));
+            var (group, reason) = AssignGroup(mod, dependents.Contains(mod.Id));
+            groups[mod.Key] = group;
+            overrideById.TryGetValue(mod.Id, out var entry);
+            var kind = entry?.Subtype ?? InferKind(mod, group);
+            assigned.Add((mod, group, kind, reason));
         }
 
-        return classified;
+        var groupById = new Dictionary<string, ModGroup>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (facts, group, _, _) in assigned)
+        {
+            if (!string.IsNullOrWhiteSpace(facts.Id))
+            {
+                groupById.TryAdd(facts.Id, group);
+            }
+        }
+
+        var parentKeyByChild = new Dictionary<string, string?>(StringComparer.Ordinal);
+        foreach (var (facts, group, _, _) in assigned)
+        {
+            parentKeyByChild[facts.Key] = ResolveParentKey(facts, group, mods, byId, groupById, overrideById);
+        }
+
+        var results = new List<ClassifiedMod>(assigned.Count);
+        foreach (var (facts, group, kind, reason) in assigned)
+        {
+            var (title, subtitle) = DisplayLines(facts);
+            var rootKey = RootKey(facts.Key, parentKeyByChild);
+            ModFacts? root = null;
+            if (rootKey is not null)
+            {
+                foreach (var candidate in mods)
+                {
+                    if (candidate.Key == rootKey)
+                    {
+                        root = candidate;
+                        break;
+                    }
+                }
+            }
+
+            var sameGroup = root is not null && groups.TryGetValue(root.Key, out var rootGroup) && rootGroup == group;
+            var (rootTitle, _) = root is null ? default : DisplayLines(root);
+            results.Add(new ClassifiedMod(
+                facts,
+                group,
+                kind,
+                facts.AffectsGameplay,
+                title,
+                subtitle,
+                sameGroup ? 1 : 0,
+                sameGroup ? root!.Key : null,
+                root is null ? null : rootTitle,
+                [reason]));
+        }
+
+        return results;
     }
 
-    public static ModCategory Classify(ModFacts mod, int dependedUponBy)
+    public static (string Title, string Subtitle) DisplayLines(ModFacts mod)
     {
-        if (KnownLibraryIds.Contains(mod.Id))
+        var manifestName = string.IsNullOrWhiteSpace(mod.Name) ? null : mod.Name.Trim();
+        var fallback = string.IsNullOrWhiteSpace(mod.Id) ? manifestName ?? "" : mod.Id;
+        var bigWithoutWorkshop = manifestName ?? fallback;
+        if (!string.IsNullOrWhiteSpace(mod.WorkshopTitle))
         {
-            return ModCategory.DependencyLibrary;
+            return (mod.WorkshopTitle.Trim(), manifestName ?? fallback);
         }
 
-        var text = Join(mod.Name, mod.Description);
-        var strong = Collect(text, includeWeak: false);
-        var libraryLike = LooksLikeLibrary(mod.Id, mod.Name, mod.Description);
-        if (libraryLike && strong != Signal.None)
-        {
-            return ModCategory.Unknown;
-        }
-
-        if (libraryLike)
-        {
-            return ModCategory.DependencyLibrary;
-        }
-
-        var contentOrBalance = (strong & (Signal.Content | Signal.Balance)) != 0;
-        if (dependedUponBy >= 2 && contentOrBalance)
-        {
-            return ModCategory.Unknown;
-        }
-
-        if (dependedUponBy >= 2)
-        {
-            return ModCategory.DependencyLibrary;
-        }
-
-        var named = Decide(Collect(text, includeWeak: !mod.AffectsGameplay), mod.AffectsGameplay);
-        if (named == Decision.Conflict)
-        {
-            return ModCategory.Unknown;
-        }
-
-        if (named != Decision.None)
-        {
-            return named.Category;
-        }
-
-        var fromWorkshop = WorkshopDecision(mod);
-        return fromWorkshop == Decision.None || fromWorkshop == Decision.Conflict
-            ? ModCategory.Unknown
-            : fromWorkshop.Category;
+        return (bigWithoutWorkshop, fallback);
     }
 
-    public static string? SecondaryWorkshopName(string inGameName, string? workshopTitle)
-    {
-        if (string.IsNullOrWhiteSpace(workshopTitle))
-        {
-            return null;
-        }
+    public static bool MatchesQuery(string? query, ModFacts facts) =>
+        MatchesQuery(query, facts.InGameName, facts.Id, facts.WorkshopTitle);
 
-        var trimmed = workshopTitle.Trim();
-        return string.Equals(trimmed, inGameName.Trim(), StringComparison.OrdinalIgnoreCase) ? null : trimmed;
-    }
-
-    public static bool MatchesQuery(string? query, string inGameName, string? workshopTitle)
+    public static bool MatchesQuery(string? query, string inGameName, string? id, string? workshopTitle)
     {
         if (string.IsNullOrWhiteSpace(query))
         {
@@ -175,51 +177,326 @@ public static partial class ModClassifier
             return true;
         }
 
+        if (!string.IsNullOrEmpty(id) && id.Contains(needle, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
         return !string.IsNullOrWhiteSpace(workshopTitle)
             && workshopTitle.Contains(needle, StringComparison.OrdinalIgnoreCase);
     }
 
-    private static Decision WorkshopDecision(ModFacts mod)
+    private static (ModGroup Group, string Reason) AssignGroup(ModFacts mod, bool dependedUpon)
     {
-        var tagSignal = Signal.None;
-        var libraryTag = false;
+        if (KnownLibraryIds.Contains(mod.Id))
+        {
+            return (ModGroup.Library, "已知依赖库");
+        }
+
+        if (LooksLikeLibrary(mod.Id, mod.Name) && !HasContentTag(mod))
+        {
+            return (ModGroup.Library, "名称或 id 像依赖库，且没有内容类工坊标签");
+        }
+
+        if (dependedUpon && HasToolsAndApis(mod))
+        {
+            return (ModGroup.Library, "有其他模组依赖它，且带有 Tools & APIs");
+        }
+
+        return mod.AffectsGameplay
+            ? (ModGroup.Gameplay, "affects_gameplay 未关闭")
+            : (ModGroup.LocalOnly, "affects_gameplay 为 false");
+    }
+
+    private static ModKind InferKind(ModFacts mod, ModGroup group)
+    {
+        if (HasTag(mod, "Characters"))
+        {
+            return group == ModGroup.LocalOnly ? ModKind.Cosmetic : ModKind.Character;
+        }
+
+        if (HasTag(mod, "Cosmetics"))
+        {
+            return ModKind.Cosmetic;
+        }
+
+        if (HasContentTag(mod))
+        {
+            return ModKind.Content;
+        }
+
+        if (HasTag(mod, "Modifiers"))
+        {
+            return ModKind.Mechanic;
+        }
+
+        if (HasTag(mod, "QoL"))
+        {
+            return ModKind.Interface;
+        }
+
+        if (HasToolsAndApis(mod))
+        {
+            return ModKind.Tool;
+        }
+
+        return ModKind.Other;
+    }
+
+    private static string? ResolveParentKey(
+        ModFacts child,
+        ModGroup childGroup,
+        IReadOnlyList<ModFacts> mods,
+        IReadOnlyDictionary<string, ModFacts> byId,
+        IReadOnlyDictionary<string, ModGroup> groupById,
+        IReadOnlyDictionary<string, ModOverride> overrideById)
+    {
+        if (overrideById.TryGetValue(child.Id, out var entry) && entry.ParentSpecified)
+        {
+            return AcceptParent(child, entry.ParentId, byId, groupById)?.Key;
+        }
+
+        if (childGroup == ModGroup.Library)
+        {
+            return null;
+        }
+
+        foreach (var dependencyId in child.DependencyIds)
+        {
+            var parent = AcceptParent(child, dependencyId, byId, groupById);
+            if (parent is not null)
+            {
+                return parent.Key;
+            }
+        }
+
+        var named = LongestNameParent(child, mods, groupById);
+        if (named is not null)
+        {
+            return named.Key;
+        }
+
+        return LongestIdParent(child, mods, groupById)?.Key;
+    }
+
+    private static ModFacts? AcceptParent(
+        ModFacts child,
+        string? parentId,
+        IReadOnlyDictionary<string, ModFacts> byId,
+        IReadOnlyDictionary<string, ModGroup> groupById)
+    {
+        if (string.IsNullOrWhiteSpace(parentId)
+            || parentId.Equals(child.Id, StringComparison.OrdinalIgnoreCase)
+            || !byId.TryGetValue(parentId, out var parent)
+            || parent.Key == child.Key)
+        {
+            return null;
+        }
+
+        return groupById.TryGetValue(parent.Id, out var group) && group == ModGroup.Library
+            ? null
+            : parent;
+    }
+
+    private static ModFacts? LongestNameParent(
+        ModFacts child,
+        IReadOnlyList<ModFacts> mods,
+        IReadOnlyDictionary<string, ModGroup> groupById)
+    {
+        var childTexts = CandidateTexts(child);
+        ModFacts? best = null;
+        var bestLength = 0;
+        foreach (var parent in mods)
+        {
+            if (parent.Key == child.Key || IsLibrary(parent, groupById))
+            {
+                continue;
+            }
+
+            foreach (var raw in CandidateTexts(parent))
+            {
+                var prefix = Clean(raw);
+                if (!QualifiesAsPrefix(prefix) || prefix.Length <= bestLength)
+                {
+                    continue;
+                }
+
+                if (!childTexts.Any(text => StartsWithSeparatedPrefix(Clean(text), prefix)))
+                {
+                    continue;
+                }
+
+                best = parent;
+                bestLength = prefix.Length;
+            }
+        }
+
+        return best;
+    }
+
+    private static ModFacts? LongestIdParent(
+        ModFacts child,
+        IReadOnlyList<ModFacts> mods,
+        IReadOnlyDictionary<string, ModGroup> groupById)
+    {
+        ModFacts? best = null;
+        var bestLength = 0;
+        foreach (var parent in mods)
+        {
+            if (parent.Key == child.Key
+                || parent.Id.Length < 4
+                || parent.Id.Length <= bestLength
+                || IsLibrary(parent, groupById)
+                || !IsIdExtension(child.Id, parent.Id))
+            {
+                continue;
+            }
+
+            best = parent;
+            bestLength = parent.Id.Length;
+        }
+
+        return best;
+    }
+
+    private static bool IsLibrary(ModFacts mod, IReadOnlyDictionary<string, ModGroup> groupById) =>
+        groupById.TryGetValue(mod.Id, out var group) && group == ModGroup.Library;
+
+    private static IEnumerable<string> CandidateTexts(ModFacts mod)
+    {
+        if (!string.IsNullOrWhiteSpace(mod.WorkshopTitle))
+        {
+            yield return mod.WorkshopTitle;
+        }
+
+        yield return mod.InGameName;
+    }
+
+    private static bool StartsWithSeparatedPrefix(string child, string prefix)
+    {
+        if (child.Length <= prefix.Length || !child.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        return Separators.Contains(child[prefix.Length]);
+    }
+
+    private static bool IsIdExtension(string childId, string parentId)
+    {
+        if (string.IsNullOrEmpty(childId)
+            || childId.Length <= parentId.Length
+            || !childId.StartsWith(parentId, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var next = childId[parentId.Length];
+        return char.IsUpper(next) || char.IsDigit(next) || next is '-' or '_' or '|';
+    }
+
+    private static bool QualifiesAsPrefix(string cleaned)
+    {
+        if (cleaned.Length == 0)
+        {
+            return false;
+        }
+
+        var cjk = 0;
+        var ascii = 0;
+        foreach (var ch in cleaned)
+        {
+            if (IsCjk(ch))
+            {
+                cjk++;
+            }
+            else if (ch is (>= 'A' and <= 'Z') or (>= 'a' and <= 'z') or (>= '0' and <= '9'))
+            {
+                ascii++;
+            }
+        }
+
+        return cjk >= 2 || ascii >= 4;
+    }
+
+    private static bool IsCjk(char ch) =>
+        ch is (>= '\u4E00' and <= '\u9FFF') or (>= '\u3400' and <= '\u4DBF');
+
+    internal static string Clean(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return "";
+        }
+
+        var text = value.Normalize(NormalizationForm.FormKC);
+        text = ZeroWidth().Replace(text, "");
+        string previous;
+        do
+        {
+            previous = text;
+            text = Wrapped().Replace(text, "");
+        }
+        while (!string.Equals(text, previous, StringComparison.Ordinal));
+
+        var pipe = text.IndexOf('|');
+        if (pipe >= 0)
+        {
+            text = text[..pipe];
+        }
+
+        return text.Trim();
+    }
+
+    private static string? RootKey(string key, IReadOnlyDictionary<string, string?> parentKeyByChild)
+    {
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var current = key;
+        string? root = null;
+        while (parentKeyByChild.TryGetValue(current, out var parent) && !string.IsNullOrEmpty(parent))
+        {
+            if (!seen.Add(current))
+            {
+                return null;
+            }
+
+            root = parent;
+            current = parent;
+        }
+
+        return root;
+    }
+
+    private static bool HasContentTag(ModFacts mod)
+    {
+        foreach (var tag in ContentTags)
+        {
+            if (HasTag(mod, tag))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool HasToolsAndApis(ModFacts mod) =>
+        HasTag(mod, "Tools & APIs") || HasTag(mod, "Tools &amp; APIs");
+
+    private static bool HasTag(ModFacts mod, string expected)
+    {
         foreach (var tag in mod.WorkshopTags)
         {
             foreach (var piece in SplitTag(tag))
             {
-                if (IsLibraryTag(piece))
+                if (piece.Equals(expected, StringComparison.OrdinalIgnoreCase))
                 {
-                    libraryTag = true;
-                    continue;
+                    return true;
                 }
-
-                tagSignal |= Collect(piece, includeWeak: true);
             }
         }
 
-        var titleSignal = Collect(mod.WorkshopTitle, includeWeak: false);
-        if (tagSignal != Signal.None && titleSignal != Signal.None && tagSignal != titleSignal)
-        {
-            return Decision.Conflict;
-        }
-
-        var combined = tagSignal | titleSignal;
-        if (libraryTag && combined != Signal.None)
-        {
-            return Decision.Conflict;
-        }
-
-        if (libraryTag)
-        {
-            return Decision.Of(ModCategory.DependencyLibrary);
-        }
-
-        if (combined == Signal.None)
-        {
-            return Decision.None;
-        }
-
-        return Decide(combined, mod.AffectsGameplay);
+        return false;
     }
 
     private static IEnumerable<string> SplitTag(string? tag)
@@ -235,111 +512,14 @@ public static partial class ModClassifier
         }
     }
 
-    private static bool IsLibraryTag(string tag) =>
-        tag.Equals("library", StringComparison.OrdinalIgnoreCase)
-        || tag.Equals("framework", StringComparison.OrdinalIgnoreCase)
-        || tag.Equals("dependency", StringComparison.OrdinalIgnoreCase)
-        || tag.Equals("依赖库", StringComparison.Ordinal);
+    private static bool LooksLikeLibrary(string id, string? name) =>
+        LibraryToken().IsMatch(id) || (name is not null && LibraryToken().IsMatch(name));
 
-    private readonly record struct Decision(ModCategory Category, bool IsSet, bool IsConflict)
-    {
-        public static Decision None => default;
+    [GeneratedRegex(@"[\u200B\u200C\u200D\uFEFF\u2060]", RegexOptions.CultureInvariant)]
+    private static partial Regex ZeroWidth();
 
-        public static Decision Conflict => new(ModCategory.Unknown, false, true);
-
-        public static Decision Of(ModCategory category) => new(category, true, false);
-    }
-
-    private static Decision Decide(Signal signal, bool affectsGameplay)
-    {
-        if (signal == Signal.None)
-        {
-            return Decision.None;
-        }
-
-        if (!ExactlyOne(signal))
-        {
-            return Decision.Conflict;
-        }
-
-        if ((signal & Signal.Content) != 0)
-        {
-            return affectsGameplay ? Decision.Of(ModCategory.Content) : Decision.Conflict;
-        }
-
-        if ((signal & Signal.Balance) != 0)
-        {
-            return affectsGameplay ? Decision.Of(ModCategory.Balance) : Decision.Conflict;
-        }
-
-        if ((signal & Signal.Qol) != 0)
-        {
-            return affectsGameplay ? Decision.Conflict : Decision.Of(ModCategory.QolUi);
-        }
-
-        if ((signal & Signal.Debug) != 0)
-        {
-            return Decision.Of(ModCategory.DebugTool);
-        }
-
-        return Decision.None;
-    }
-
-    private static bool ExactlyOne(Signal signal)
-    {
-        var value = (int)signal;
-        return value != 0 && (value & (value - 1)) == 0;
-    }
-
-    private static Signal Collect(string? text, bool includeWeak)
-    {
-        if (string.IsNullOrWhiteSpace(text))
-        {
-            return Signal.None;
-        }
-
-        var found = Signal.None;
-        foreach (var term in Terms)
-        {
-            if (term.Weak && !includeWeak)
-            {
-                continue;
-            }
-
-            var hit = term.AsciiWord
-                ? ContainsAsciiWord(text, term.Text)
-                : text.Contains(term.Text, StringComparison.OrdinalIgnoreCase);
-            if (hit)
-            {
-                found |= term.Signal;
-            }
-        }
-
-        return found;
-    }
-
-    private static bool ContainsAsciiWord(string text, string word) =>
-        Regex.IsMatch(text, $@"(?<![A-Za-z0-9]){Regex.Escape(word)}(?![A-Za-z0-9])", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-
-    private static bool LooksLikeLibrary(string id, string? name, string? description)
-    {
-        if (LibraryToken().IsMatch(id) || (name is not null && LibraryToken().IsMatch(name)))
-        {
-            return true;
-        }
-
-        if (string.IsNullOrWhiteSpace(description))
-        {
-            return false;
-        }
-
-        return description.Contains("依赖库", StringComparison.Ordinal)
-            || description.Contains("library", StringComparison.OrdinalIgnoreCase)
-            || description.Contains("framework", StringComparison.OrdinalIgnoreCase)
-            || description.Contains("modding api", StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static string Join(string? name, string? description) => $"{name}\n{description}";
+    [GeneratedRegex(@"【[^】]*】|（[^）]*）|\([^)]*\)", RegexOptions.CultureInvariant)]
+    private static partial Regex Wrapped();
 
     [GeneratedRegex(@"(?i)(?:(?:^|[^A-Za-z0-9])(?:lib|library|framework)(?:[^A-Za-z0-9]|$)|(?:lib|library|framework)$)", RegexOptions.CultureInvariant)]
     private static partial Regex LibraryToken();

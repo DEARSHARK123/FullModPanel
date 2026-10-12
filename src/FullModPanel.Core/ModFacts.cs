@@ -46,15 +46,24 @@ public static class PanelCopy
 {
     public const string SearchPlaceholder = "搜索模组名称或工坊标题...";
 
-    public const string SelectAllVisible = "全选当前";
+    public const string SelectAll = "全选";
 
-    public const string InvertVisible = "反选当前";
+    public const string Invert = "反选";
 
-    public const string SelectCategory = "全选本类";
+    public const string GroupScopeHint = "只作用于本组";
 
-    public const string InvertCategory = "反选本类";
+    public const string VisibleScopeHint = "只作用于当前搜索结果";
+
+    public const string ExtensionsLabel = "{0} 个扩展";
+
+    public const string ExtendsFormat = "扩展自 {0}";
 
     public const string NoHits = "未找到匹配的模组";
-
-    public const string RestartNotice = "更改将在完全退出并重新启动游戏后生效。";
 }
+
+/// <summary>
+/// A user override for one manifest id. Group is never overridable.
+/// <see cref="ParentSpecified"/> with a null <see cref="ParentId"/> clears attachment
+/// and does not fall through to dependencies or prefixes.
+/// </summary>
+public sealed record ModOverride(string Id, bool ParentSpecified, string? ParentId, ModKind? Subtype);

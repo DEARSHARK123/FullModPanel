@@ -10,14 +10,15 @@ using MegaCrit.Sts2.Core.Platform.Steam;
 namespace FullModPanel;
 
 /// <summary>
-/// Inserts search, bulk actions, and category headers into the stock
+/// Inserts search, bulk actions, and group headers into the stock
 /// <see cref="NModdingScreen"/>. Vanilla rows, tickboxes, detail pane, and Back stay.
+/// The list title is the workshop title; the detail pane keeps the manifest name.
 /// </summary>
 internal sealed class VanillaModListDriver : Node
 {
     private const string InsertGroup = "fullmodpanel_insert";
-    private const float RowHeight = 72f;
     private const float RowHeightWithSubtitle = 100f;
+    private const float Indent = 28f;
 
     private static readonly Color Cream = new(1f, 0.964706f, 0.886275f);
     private static readonly Color Gold = new(0.831373f, 0.701961f, 0.360784f);
@@ -29,6 +30,7 @@ internal sealed class VanillaModListDriver : Node
 
     private readonly Sts2EnableStore _store = new();
     private readonly Dictionary<ulong, WorkshopText> _workshop = [];
+    private readonly HashSet<string> _expanded = new(StringComparer.Ordinal);
 
     private NModdingScreen? _screen;
     private NScrollableContainer? _scroll;
@@ -106,111 +108,81 @@ internal sealed class VanillaModListDriver : Node
         }
 
         var query = _session?.Query ?? _search?.Text ?? "";
-            _session = ModPanelSession.Create(Sts2ModCatalog.Read(_workshop), _store);
-            _session.SetQuery(query);
-            var snapshot = _session.Snapshot();
-            if (_selectAll is not null)
+        _session = ModPanelSession.Create(Sts2ModCatalog.Read(_workshop), _store, Sts2ModOverrides.Read());
+        _session.SetQuery(query);
+        var snapshot = _session.Snapshot();
+        if (_selectAll is not null)
+        {
+            _selectAll.Disabled = !snapshot.BulkEnabled;
+        }
+
+        if (_invert is not null)
+        {
+            _invert.Disabled = !snapshot.BulkEnabled;
+        }
+
+        var rows = new List<NModMenuRow>();
+        foreach (var child in content.GetChildren())
+        {
+            if (child is NModMenuRow row)
             {
-                _selectAll.Disabled = !snapshot.BulkEnabled;
+                rows.Add(row);
+            }
+        }
+
+        RemoveInserts();
+
+        var rowByKey = new Dictionary<string, NModMenuRow>(StringComparer.Ordinal);
+        foreach (var row in rows)
+        {
+            if (row.Mod is not { } mod)
+            {
+                continue;
             }
 
-            if (_invert is not null)
-            {
-                _invert.Disabled = !snapshot.BulkEnabled;
-            }
+            rowByKey[Sts2ModCatalog.Identify(mod).Key] = row;
+            row.Visible = false;
+        }
 
-            var rows = new List<NModMenuRow>();
-            foreach (var child in content.GetChildren())
+        var index = 0;
+        var any = false;
+        foreach (var block in snapshot.Blocks)
+        {
+            any = true;
+            Place(content, MakeHeader(block), ref index);
+            foreach (var snap in block.Rows)
             {
-                if (child is NModMenuRow row)
-                {
-                    rows.Add(row);
-                }
-            }
-
-            RemoveInserts();
-
-            var facts = snapshot.Blocks
-                .SelectMany(block => block.Rows.Select(row => (block, row)))
-                .ToDictionary(item => item.row.Key, item => item);
-            var used = new HashSet<NModMenuRow>();
-            var grouped = new Dictionary<ModCategory, List<Placed>>();
-            foreach (var category in ModCategoryDisplay.Order)
-            {
-                grouped[category] = [];
-            }
-
-            foreach (var row in rows)
-            {
-                if (row.Mod is not { } mod)
+                if (!rowByKey.Remove(snap.Key, out var row))
                 {
                     continue;
                 }
 
-                var identity = Sts2ModCatalog.Identify(mod);
-                if (!facts.TryGetValue(identity.Key, out var placed))
-                {
-                    var name = mod.manifest?.name ?? identity.StableId;
-                    if (!ModClassifier.MatchesQuery(query, name, null))
-                    {
-                        HideRow(row);
-                        continue;
-                    }
-
-                    grouped[ModCategory.Unknown].Add(new Placed(row, null, null, ReadTick(row)));
-                    used.Add(row);
-                    continue;
-                }
-
-                used.Add(row);
-                var subtitle = ModClassifier.SecondaryWorkshopName(placed.row.InGameName, placed.row.WorkshopTitle);
-                grouped[placed.block.Category].Add(new Placed(row, placed.row, subtitle, placed.row.Enabled));
-            }
-
-            foreach (var row in rows)
-            {
-                if (!used.Contains(row))
+                var collapsed = snap.Depth > 0
+                    && snap.ParentKey is { } parent
+                    && !_expanded.Contains(parent);
+                ApplyRow(row, snap);
+                if (collapsed)
                 {
                     HideRow(row);
                 }
+                else
+                {
+                    row.Visible = true;
+                }
+
+                Place(content, row, ref index);
             }
+        }
 
-            var index = 0;
-            var any = false;
-            foreach (var category in ModCategoryDisplay.Order)
-            {
-                var group = grouped[category];
-                if (group.Count == 0)
-                {
-                    continue;
-                }
+        foreach (var row in rowByKey.Values)
+        {
+            HideRow(row);
+        }
 
-                any = true;
-                var selectedCount = 0;
-                foreach (var item in group)
-                {
-                    if (item.Enabled)
-                    {
-                        selectedCount++;
-                    }
-                }
-
-                var header = MakeHeader(category, selectedCount, group.Count);
-                Place(content, header, ref index);
-                foreach (var item in group)
-                {
-                    item.Row.Visible = true;
-                    ApplySubtitle(item.Row, item.Subtitle);
-                    SyncTick(item.Row, item.Enabled);
-                    Place(content, item.Row, ref index);
-                }
-            }
-
-            var empty = MakeEmpty(any);
-            Place(content, empty, ref index);
-            scroll.DisableScrollingIfContentFits();
-            RequestWorkshop();
-            FitChrome();
+        Place(content, MakeEmpty(any), ref index);
+        scroll.DisableScrollingIfContentFits();
+        RequestWorkshop();
+        FitChrome();
     }
 
     public override void _ExitTree()
@@ -235,11 +207,6 @@ internal sealed class VanillaModListDriver : Node
         _chrome.AnchorBottom = 0;
         border.AddChild(_chrome);
 
-        var hint = MakeLabel(PanelCopy.RestartNotice, Gold, 15);
-        hint.AutowrapMode = TextServer.AutowrapMode.Arbitrary;
-        hint.SizeFlagsHorizontal = Control.SizeFlags.ExpandFill;
-        _chrome.AddChild(hint);
-
         var tools = new HBoxContainer { Alignment = BoxContainer.AlignmentMode.Center };
         tools.AddThemeConstantOverride("separation", 6);
         tools.SizeFlagsHorizontal = Control.SizeFlags.ExpandFill;
@@ -253,10 +220,12 @@ internal sealed class VanillaModListDriver : Node
         _search.Connect(LineEdit.SignalName.TextChanged, Callable.From<string>(OnSearchChanged));
         tools.AddChild(_search);
 
-        _selectAll = MakeButton(PanelCopy.SelectAllVisible);
+        _selectAll = MakeButton(PanelCopy.SelectAll);
+        _selectAll.TooltipText = PanelCopy.VisibleScopeHint;
         _selectAll.Connect(Button.SignalName.Pressed, Callable.From(() => DeferBulk(null, BulkAction.SelectAll)));
         tools.AddChild(_selectAll);
-        _invert = MakeButton(PanelCopy.InvertVisible);
+        _invert = MakeButton(PanelCopy.Invert);
+        _invert.TooltipText = PanelCopy.VisibleScopeHint;
         _invert.Connect(Button.SignalName.Pressed, Callable.From(() => DeferBulk(null, BulkAction.Invert)));
         tools.AddChild(_invert);
         _chrome.AddChild(tools);
@@ -292,7 +261,7 @@ internal sealed class VanillaModListDriver : Node
         Relayout();
     }
 
-    private void DeferBulk(ModCategory? category, BulkAction action)
+    private void DeferBulk(ModGroup? group, BulkAction action)
     {
         Callable.From(() =>
         {
@@ -301,9 +270,30 @@ internal sealed class VanillaModListDriver : Node
                 return;
             }
 
-            ShowError(_session.TryBulk(action, category));
+            ShowError(_session.TryBulk(action, group));
             _screen.OnModEnabledOrDisabled();
         }).CallDeferred();
+    }
+
+    private void OnExtensionPressed(Button button)
+    {
+        if (!GodotObject.IsInstanceValid(button) || !button.HasMeta("fmp_parent"))
+        {
+            return;
+        }
+
+        var key = button.GetMeta("fmp_parent").AsString();
+        if (string.IsNullOrEmpty(key))
+        {
+            return;
+        }
+
+        if (!_expanded.Remove(key))
+        {
+            _expanded.Add(key);
+        }
+
+        Callable.From(Relayout).CallDeferred();
     }
 
     private void FitChrome()
@@ -313,7 +303,7 @@ internal sealed class VanillaModListDriver : Node
             return;
         }
 
-        var height = Math.Max(_chrome.GetCombinedMinimumSize().Y, 72);
+        var height = Math.Max(_chrome.GetCombinedMinimumSize().Y, 34);
         _chrome.OffsetLeft = 12;
         _chrome.OffsetRight = -12;
         _chrome.OffsetTop = 8;
@@ -344,7 +334,7 @@ internal sealed class VanillaModListDriver : Node
         }
     }
 
-    private Control MakeHeader(ModCategory category, int selected, int total)
+    private Control MakeHeader(GroupBlockSnapshot block)
     {
         var panel = new PanelContainer
         {
@@ -367,17 +357,19 @@ internal sealed class VanillaModListDriver : Node
 
         var row = new HBoxContainer { Alignment = BoxContainer.AlignmentMode.Center };
         row.AddThemeConstantOverride("separation", 6);
-        var heading = MakeLabel($"{ModCategoryDisplay.Name(category)}  {selected}/{total}", Cream, 16);
+        var heading = MakeLabel($"{block.DisplayName}  {block.Selected}/{block.Total}", FromHex(block.SwatchHex), 16);
         heading.SizeFlagsHorizontal = Control.SizeFlags.ExpandFill;
         row.AddChild(heading);
 
-        var select = MakeButton(PanelCopy.SelectCategory);
-        select.Disabled = total == 0;
-        var captured = category;
+        var select = MakeButton(PanelCopy.SelectAll);
+        select.TooltipText = PanelCopy.GroupScopeHint;
+        select.Disabled = block.Total == 0;
+        var captured = block.Group;
         select.Connect(Button.SignalName.Pressed, Callable.From(() => DeferBulk(captured, BulkAction.SelectAll)));
         row.AddChild(select);
-        var invert = MakeButton(PanelCopy.InvertCategory);
-        invert.Disabled = total == 0;
+        var invert = MakeButton(PanelCopy.Invert);
+        invert.TooltipText = PanelCopy.GroupScopeHint;
+        invert.Disabled = block.Total == 0;
         invert.Connect(Button.SignalName.Pressed, Callable.From(() => DeferBulk(captured, BulkAction.Invert)));
         row.AddChild(invert);
         panel.AddChild(row);
@@ -421,6 +413,7 @@ internal sealed class VanillaModListDriver : Node
     /// <summary>
     /// v0.107.1 <c>NModInfoContainer</c> only exposes <c>Fill(Mod)</c>. Blank the
     /// stock detail nodes when they are still there; otherwise leave the pane.
+    /// The detail title is never rewritten while a row is selected.
     /// </summary>
     private void BlankDetail()
     {
@@ -445,27 +438,123 @@ internal sealed class VanillaModListDriver : Node
         }
     }
 
-    private static void ApplySubtitle(NModMenuRow row, string? subtitle)
+    private void ApplyRow(NModMenuRow row, RowSnapshot snapshot)
     {
         var title = row.GetNode<Control>("Title");
-        var extra = row.GetNodeOrNull<Label>("FullModPanelSubtitle");
-        if (string.IsNullOrEmpty(subtitle))
+        SetControlText(title, snapshot.Title);
+        if (!title.HasMeta("fmp_base_left"))
         {
-            if (extra is not null)
+            title.SetMeta("fmp_base_left", title.OffsetLeft);
+        }
+
+        var baseLeft = title.GetMeta("fmp_base_left").AsSingle();
+        var indent = snapshot.Depth * Indent;
+        title.OffsetLeft = baseLeft + indent;
+        title.OffsetRight = -150;
+        title.OffsetBottom = -24;
+
+        var subtitle = row.GetNodeOrNull<Label>("FullModPanelSubtitle") ?? MakeSubtitle(row);
+        subtitle.Text = snapshot.Subtitle;
+        subtitle.Visible = true;
+        subtitle.OffsetLeft = 2 + indent;
+        subtitle.TooltipText = RowTooltip(snapshot);
+        subtitle.MouseFilter = Control.MouseFilterEnum.Pass;
+        row.CustomMinimumSize = new Vector2(0, RowHeightWithSubtitle);
+        ApplyRail(row, snapshot.Depth > 0, baseLeft);
+        ApplyExtensionButton(row, snapshot, baseLeft + indent + TextWidth(snapshot.Title, 18) + 8);
+        SyncTick(row, snapshot.Enabled);
+    }
+
+    private static string RowTooltip(RowSnapshot snapshot)
+    {
+        var lines = new List<string>();
+        if (!string.IsNullOrWhiteSpace(snapshot.ExtendsTitle))
+        {
+            lines.Add(string.Format(PanelCopy.ExtendsFormat, snapshot.ExtendsTitle));
+        }
+
+        foreach (var reason in snapshot.Reasons)
+        {
+            if (!string.IsNullOrWhiteSpace(reason))
             {
-                extra.Visible = false;
+                lines.Add(reason);
+            }
+        }
+
+        return string.Join("\n", lines);
+    }
+
+    private void ApplyExtensionButton(NModMenuRow row, RowSnapshot snapshot, float left)
+    {
+        var button = row.GetNodeOrNull<Button>("FullModPanelExtensions");
+        if (snapshot.ExtensionCount <= 0)
+        {
+            if (button is not null)
+            {
+                button.Visible = false;
             }
 
-            title.OffsetBottom = 0;
-            row.CustomMinimumSize = new Vector2(0, RowHeight);
             return;
         }
 
-        extra ??= MakeSubtitle(row);
-        extra.Text = subtitle;
-        extra.Visible = true;
-        title.OffsetBottom = -24;
-        row.CustomMinimumSize = new Vector2(0, RowHeightWithSubtitle);
+        if (button is null)
+        {
+            button = MakeButton(string.Format(PanelCopy.ExtensionsLabel, snapshot.ExtensionCount));
+            button.Name = "FullModPanelExtensions";
+            button.MouseFilter = Control.MouseFilterEnum.Stop;
+            var captured = button;
+            button.Connect(Button.SignalName.Pressed, Callable.From(() => OnExtensionPressed(captured)));
+            row.AddChild(button);
+        }
+
+        button.Text = string.Format(PanelCopy.ExtensionsLabel, snapshot.ExtensionCount);
+        button.TooltipText = snapshot.ExtendsTitle is null ? "" : RowTooltip(snapshot);
+        button.Visible = true;
+        button.SetMeta("fmp_parent", snapshot.Key);
+        button.AnchorLeft = 0;
+        button.AnchorTop = 0;
+        button.AnchorRight = 0;
+        button.AnchorBottom = 0;
+        var width = Math.Max(button.GetCombinedMinimumSize().X, 72);
+        button.OffsetLeft = left;
+        button.OffsetTop = 4;
+        button.OffsetRight = left + width;
+        button.OffsetBottom = 28;
+    }
+
+    private static void ApplyRail(NModMenuRow row, bool show, float baseLeft)
+    {
+        var rail = row.GetNodeOrNull<ColorRect>("FullModPanelRail");
+        if (!show)
+        {
+            if (rail is not null)
+            {
+                rail.Visible = false;
+            }
+
+            return;
+        }
+
+        if (rail is null)
+        {
+            rail = new ColorRect
+            {
+                Name = "FullModPanelRail",
+                Color = Gold,
+                MouseFilter = Control.MouseFilterEnum.Ignore,
+            };
+            row.AddChild(rail);
+        }
+
+        rail.Visible = true;
+        rail.AnchorLeft = 0;
+        rail.AnchorTop = 0;
+        rail.AnchorRight = 0;
+        rail.AnchorBottom = 1;
+        rail.OffsetLeft = baseLeft + 8;
+        rail.OffsetRight = baseLeft + 10;
+        rail.OffsetTop = 10;
+        rail.OffsetBottom = -10;
     }
 
     private static Label MakeSubtitle(NModMenuRow row)
@@ -481,8 +570,42 @@ internal sealed class VanillaModListDriver : Node
         label.OffsetTop = -22;
         label.OffsetBottom = -2;
         label.ClipContents = true;
+        label.MouseFilter = Control.MouseFilterEnum.Pass;
         row.AddChild(label);
         return label;
+    }
+
+    private static void SetControlText(Control title, string text)
+    {
+        switch (title)
+        {
+            case Label label:
+                label.Text = text;
+                break;
+            case RichTextLabel rich:
+                rich.Text = text;
+                break;
+        }
+    }
+
+    private static float TextWidth(string text, int fontSize)
+    {
+        var width = 0f;
+        foreach (var ch in text)
+        {
+            width += ch > 127 ? fontSize : fontSize * 0.55f;
+        }
+
+        return width;
+    }
+
+    private static Color FromHex(string hex)
+    {
+        hex = hex.TrimStart('#');
+        var red = Convert.ToByte(hex[..2], 16) / 255f;
+        var green = Convert.ToByte(hex[2..4], 16) / 255f;
+        var blue = Convert.ToByte(hex[4..6], 16) / 255f;
+        return new Color(red, green, blue);
     }
 
     private static void SyncTick(NModMenuRow row, bool enabled)
@@ -501,9 +624,6 @@ internal sealed class VanillaModListDriver : Node
             Log.Warn($"FullModPanel could not sync a tickbox: {ex.Message}");
         }
     }
-
-    private static bool ReadTick(NModMenuRow row) =>
-        row.GetNodeOrNull<NTickbox>("Tickbox")?.IsTicked ?? true;
 
     private void RequestWorkshop()
     {
@@ -691,6 +811,4 @@ internal sealed class VanillaModListDriver : Node
             ?? ResourceLoader.Load<Font>("res://themes/fonts/zhs/noto_sans_mono_cjksc_regular_shared.tres", null, ResourceLoader.CacheMode.Reuse);
         return _font;
     }
-
-    private readonly record struct Placed(NModMenuRow Row, RowSnapshot? Snapshot, string? Subtitle, bool Enabled);
 }

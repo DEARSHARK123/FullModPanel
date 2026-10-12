@@ -1,16 +1,27 @@
 namespace FullModPanel.Core;
 
 /// <summary>
-/// Stable category set. Display names are the contract: add a member later, never rename an existing label.
+/// Top-level list groups. Display names are the contract.
 /// </summary>
-public enum ModCategory
+public enum ModGroup
 {
-    DependencyLibrary = 0,
+    Library = 0,
+    Gameplay = 1,
+    LocalOnly = 2,
+}
+
+/// <summary>
+/// Optional subtype stored in overrides. The list does not draw it.
+/// </summary>
+public enum ModKind
+{
+    Character = 0,
     Content = 1,
-    QolUi = 2,
-    Balance = 3,
-    DebugTool = 4,
-    Unknown = 5,
+    Mechanic = 2,
+    Cosmetic = 3,
+    Interface = 4,
+    Tool = 5,
+    Other = 6,
 }
 
 public enum ModOrigin
@@ -20,36 +31,27 @@ public enum ModOrigin
     SteamWorkshop = 2,
 }
 
-public static class ModCategoryDisplay
+public static class ModGroupDisplay
 {
-    public static IReadOnlyList<ModCategory> Order { get; } =
+    public static IReadOnlyList<ModGroup> Order { get; } =
     [
-        ModCategory.DependencyLibrary,
-        ModCategory.Content,
-        ModCategory.QolUi,
-        ModCategory.Balance,
-        ModCategory.DebugTool,
-        ModCategory.Unknown,
+        ModGroup.Library,
+        ModGroup.Gameplay,
+        ModGroup.LocalOnly,
     ];
 
-    public static string Name(ModCategory category) => category switch
+    public static string Name(ModGroup group) => group switch
     {
-        ModCategory.DependencyLibrary => "前置 / API",
-        ModCategory.Content => "角色与扩展",
-        ModCategory.QolUi => "体验优化 · QoL",
-        ModCategory.Balance => "玩法机制 · 调整",
-        ModCategory.DebugTool => "开发与调试",
-        ModCategory.Unknown => "未分类",
+        ModGroup.Library => "依赖库",
+        ModGroup.Gameplay => "角色 / 玩法 / 内容",
+        ModGroup.LocalOnly => "皮肤",
     };
 
-    public static string ColorHex(ModCategory category) => category switch
+    public static string ColorHex(ModGroup group) => group switch
     {
-        ModCategory.DependencyLibrary => "#7EB6FF",
-        ModCategory.Content => "#F0C14A",
-        ModCategory.QolUi => "#6FCFC4",
-        ModCategory.Balance => "#F0997B",
-        ModCategory.DebugTool => "#C9A0FF",
-        ModCategory.Unknown => "#A8A8A8",
+        ModGroup.Library => "#7EB6FF",
+        ModGroup.Gameplay => "#F0C14A",
+        ModGroup.LocalOnly => "#6FCFC4",
     };
 }
 
