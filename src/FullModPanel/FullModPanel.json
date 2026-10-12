@@ -2,7 +2,7 @@
   "id": "FullModPanel",
   "name": "更好的模组面板 Better Mod Panel",
   "author": "FullModPanel",
-  "description": "在设置界面中分类管理已安装模组，支持按模组名及创意工坊标题双向搜索、批量启闭。不影响游戏对局与存档。",
+  "description": "在设置界面中分类管理已安装模组，支持同时按模组名与创意工坊标题搜索、一键批量启闭。不影响游戏对局与存档。",
   "version": "0.1.0",
   "has_dll": true,
   "has_pck": false,
