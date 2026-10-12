@@ -1,5 +1,6 @@
 using FullModPanel.Core;
 using Godot;
+using MegaCrit.Sts2.Core.Localization;
 using MegaCrit.Sts2.Core.Localization.Fonts;
 using MegaCrit.Sts2.Core.Logging;
 using MegaCrit.Sts2.Core.Nodes.CommonUi;
@@ -17,7 +18,20 @@ namespace FullModPanel;
 internal sealed class VanillaModListDriver : Node
 {
     private const string InsertGroup = "fullmodpanel_insert";
-    private const float RowHeightWithSubtitle = 100f;
+    private const float RowHeightWithSubtitle = 96f;
+    /// <summary>Bottom strip of a row that holds the subtitle; the vanilla title sits above it.</summary>
+    private const float SubtitleBand = 32f;
+    /// <summary>The title line stops this far from the row's right edge, clear of the Steam icon and tickbox.</summary>
+    private const float TitleRightInset = 150f;
+    private const string TitleRowName = "FullModPanelTitleRow";
+    private const int TitleFontSize = 28;
+    private const int ExtensionCountFontSize = 18;
+    private const int SubtitleFontSize = 20;
+    private const int HeaderFontSize = 22;
+    private const int ButtonFontSize = 18;
+    private const int SearchFontSize = 20;
+    private const int InfoFontSize = 18;
+    private const int EmptyFontSize = 22;
     private const float Indent = 28f;
 
     private static readonly Color Cream = new(1f, 0.964706f, 0.886275f);
@@ -47,6 +61,7 @@ internal sealed class VanillaModListDriver : Node
     private bool _polling;
     private bool _layingOut;
     private ulong[] _requestedIds = [];
+    private LocManager.LocaleChangeCallback? _localeCallback;
 
     public static void NoteSelection(NModdingScreen screen, NModMenuRow row) =>
         screen.GetNodeOrNull<VanillaModListDriver>("FullModPanelDriver")?.Remember(row);
@@ -54,6 +69,8 @@ internal sealed class VanillaModListDriver : Node
     public void Install(NModdingScreen screen)
     {
         _screen = screen;
+        // Read the locale on every open: the setting may have changed while the screen was closed.
+        PanelCopy.Language = Sts2Language.Current();
         if (screen.GetNodeOrNull<Control>("%ModInfoContainer") is Control info)
         {
             info.Visible = true;
@@ -71,9 +88,54 @@ internal sealed class VanillaModListDriver : Node
         {
             BuildChrome();
         }
+        else
+        {
+            RefreshChrome();
+        }
 
+        _localeCallback ??= Sts2Language.Subscribe(OnLocaleChanged);
         EnsurePolling();
         Relayout();
+    }
+
+    /// <summary>The game locale changed while the screen is open. Rebuilds every string the panel draws.</summary>
+    private void OnLocaleChanged()
+    {
+        var language = Sts2Language.Current();
+        if (language == PanelCopy.Language)
+        {
+            return;
+        }
+
+        PanelCopy.Language = language;
+        RefreshChrome();
+        Relayout();
+    }
+
+    /// <summary>Sets the static chrome texts to the current language. Rows and headers are rebuilt on every layout.</summary>
+    private void RefreshChrome()
+    {
+        if (_search is not null)
+        {
+            _search.PlaceholderText = PanelCopy.SearchPlaceholder;
+        }
+
+        if (_selectAll is not null)
+        {
+            _selectAll.Text = PanelCopy.SelectAll;
+            _selectAll.TooltipText = PanelCopy.VisibleScopeHint;
+        }
+
+        if (_invert is not null)
+        {
+            _invert.Text = PanelCopy.Invert;
+            _invert.TooltipText = PanelCopy.VisibleScopeHint;
+        }
+
+        if (_loading is not null)
+        {
+            _loading.Text = PanelCopy.Loading;
+        }
     }
 
     public void Remember(NModMenuRow row) => _selected = row;
@@ -188,6 +250,8 @@ internal sealed class VanillaModListDriver : Node
     public override void _ExitTree()
     {
         StopPolling();
+        Sts2Language.Unsubscribe(_localeCallback);
+        _localeCallback = null;
         base._ExitTree();
     }
 
@@ -214,7 +278,7 @@ internal sealed class VanillaModListDriver : Node
         {
             PlaceholderText = PanelCopy.SearchPlaceholder,
             SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
-            CustomMinimumSize = new Vector2(0, 30),
+            CustomMinimumSize = new Vector2(0, 38),
         };
         StyleField(_search);
         _search.Connect(LineEdit.SignalName.TextChanged, Callable.From<string>(OnSearchChanged));
@@ -230,10 +294,10 @@ internal sealed class VanillaModListDriver : Node
         tools.AddChild(_invert);
         _chrome.AddChild(tools);
 
-        _loading = MakeLabel("正在加载创意工坊信息…", Dim, 13);
+        _loading = MakeLabel(PanelCopy.Loading, Dim, InfoFontSize);
         _loading.Visible = false;
         _chrome.AddChild(_loading);
-        _error = MakeLabel("", ErrorColor, 13);
+        _error = MakeLabel("", ErrorColor, InfoFontSize);
         _error.AutowrapMode = TextServer.AutowrapMode.Arbitrary;
         _error.Visible = false;
         _chrome.AddChild(_error);
@@ -259,6 +323,17 @@ internal sealed class VanillaModListDriver : Node
         _session.SetQuery(text);
         ShowError(null);
         Relayout();
+        // The old scroll offset can point past a shorter result list, which leaves
+        // the rows and the "no hits" label above the viewport.
+        ResetScroll();
+    }
+
+    private void ResetScroll()
+    {
+        if (_scroll is not null && GodotObject.IsInstanceValid(_scroll))
+        {
+            _scroll.InstantlyScrollToTop();
+        }
     }
 
     private void DeferBulk(ModGroup? group, BulkAction action)
@@ -357,7 +432,7 @@ internal sealed class VanillaModListDriver : Node
 
         var row = new HBoxContainer { Alignment = BoxContainer.AlignmentMode.Center };
         row.AddThemeConstantOverride("separation", 6);
-        var heading = MakeLabel($"{block.DisplayName}  {block.Selected}/{block.Total}", FromHex(block.SwatchHex), 16);
+        var heading = MakeLabel($"{block.DisplayName}  {block.Selected}/{block.Total}", FromHex(block.SwatchHex), HeaderFontSize);
         heading.SizeFlagsHorizontal = Control.SizeFlags.ExpandFill;
         row.AddChild(heading);
 
@@ -378,11 +453,11 @@ internal sealed class VanillaModListDriver : Node
 
     private Control MakeEmpty(bool anyVisible)
     {
-        var label = MakeLabel(PanelCopy.NoHits, Cream, 18);
+        var label = MakeLabel(PanelCopy.NoHits, Cream, EmptyFontSize);
         label.Name = "FullModPanelEmpty";
         label.AddToGroup(InsertGroup);
         label.Visible = !anyVisible;
-        label.CustomMinimumSize = new Vector2(0, anyVisible ? 0 : 36);
+        label.CustomMinimumSize = new Vector2(0, anyVisible ? 0 : 44);
         return label;
     }
 
@@ -442,27 +517,43 @@ internal sealed class VanillaModListDriver : Node
     {
         var title = row.GetNode<Control>("Title");
         SetControlText(title, snapshot.Title);
-        if (!title.HasMeta("fmp_base_left"))
-        {
-            title.SetMeta("fmp_base_left", title.OffsetLeft);
-        }
+        RememberVanillaTitleSpan(title);
 
         var baseLeft = title.GetMeta("fmp_base_left").AsSingle();
+        var baseRight = title.GetMeta("fmp_base_right").AsSingle();
         var indent = snapshot.Depth * Indent;
+        // The vanilla title is anchored left-wide, so OffsetRight is an absolute
+        // x position. Writing a negative value there made the box zero-width and
+        // the text collapsed. Keep the vanilla width and move the box only for
+        // indentation; stop it above the subtitle band.
         title.OffsetLeft = baseLeft + indent;
-        title.OffsetRight = -150;
-        title.OffsetBottom = -24;
+        title.OffsetRight = baseRight + indent;
+        title.OffsetTop = 0;
+        title.OffsetBottom = -SubtitleBand;
 
         var subtitle = row.GetNodeOrNull<Label>("FullModPanelSubtitle") ?? MakeSubtitle(row);
         subtitle.Text = snapshot.Subtitle;
         subtitle.Visible = true;
         subtitle.OffsetLeft = 2 + indent;
-        subtitle.TooltipText = RowTooltip(snapshot);
+        subtitle.OffsetTop = -SubtitleBand + 2;
+        subtitle.OffsetBottom = -2;
+        subtitle.TooltipText = SubtitleTooltip(snapshot);
         subtitle.MouseFilter = Control.MouseFilterEnum.Pass;
         row.CustomMinimumSize = new Vector2(0, RowHeightWithSubtitle);
         ApplyRail(row, snapshot.Depth > 0, baseLeft);
-        ApplyExtensionButton(row, snapshot, baseLeft + indent + TextWidth(snapshot.Title, 18) + 8);
+        ApplyTitleRow(row, snapshot, title, baseLeft + indent);
         SyncTick(row, snapshot.Enabled);
+    }
+
+    private static void RememberVanillaTitleSpan(Control title)
+    {
+        if (title.HasMeta("fmp_base_left") && title.HasMeta("fmp_base_right"))
+        {
+            return;
+        }
+
+        title.SetMeta("fmp_base_left", title.OffsetLeft);
+        title.SetMeta("fmp_base_right", title.OffsetRight);
     }
 
     private static string RowTooltip(RowSnapshot snapshot)
@@ -484,42 +575,41 @@ internal sealed class VanillaModListDriver : Node
         return string.Join("\n", lines);
     }
 
-    private void ApplyExtensionButton(NModMenuRow row, RowSnapshot snapshot, float left)
+    /// <summary>
+    /// Draws the title as a label that ellipsizes, followed by the expand toggle and
+    /// the count. The vanilla title is hidden because RichTextLabel cannot ellipsize.
+    /// Only parent rows get the toggle and count.
+    /// </summary>
+    private void ApplyTitleRow(NModMenuRow row, RowSnapshot snapshot, Control vanillaTitle, float leftEdge)
     {
-        var button = row.GetNodeOrNull<Button>("FullModPanelExtensions");
-        if (snapshot.ExtensionCount <= 0)
-        {
-            if (button is not null)
-            {
-                button.Visible = false;
-            }
+        vanillaTitle.Visible = false;
 
-            return;
-        }
+        var line = row.GetNodeOrNull<HBoxContainer>(TitleRowName) ?? MakeTitleRow(row, vanillaTitle);
+        line.OffsetLeft = leftEdge;
+        line.OffsetRight = -TitleRightInset;
+        line.OffsetTop = 0;
+        line.OffsetBottom = -SubtitleBand;
 
-        if (button is null)
-        {
-            button = MakeButton(string.Format(PanelCopy.ExtensionsLabel, snapshot.ExtensionCount));
-            button.Name = "FullModPanelExtensions";
-            button.MouseFilter = Control.MouseFilterEnum.Stop;
-            var captured = button;
-            button.Connect(Button.SignalName.Pressed, Callable.From(() => OnExtensionPressed(captured)));
-            row.AddChild(button);
-        }
+        var text = line.GetNode<Label>("Text");
+        text.Text = snapshot.Title;
+        text.TooltipText = snapshot.Title;
 
-        button.Text = string.Format(PanelCopy.ExtensionsLabel, snapshot.ExtensionCount);
-        button.TooltipText = snapshot.ExtendsTitle is null ? "" : RowTooltip(snapshot);
-        button.Visible = true;
-        button.SetMeta("fmp_parent", snapshot.Key);
-        button.AnchorLeft = 0;
-        button.AnchorTop = 0;
-        button.AnchorRight = 0;
-        button.AnchorBottom = 0;
-        var width = Math.Max(button.GetCombinedMinimumSize().X, 72);
-        button.OffsetLeft = left;
-        button.OffsetTop = 4;
-        button.OffsetRight = left + width;
-        button.OffsetBottom = 28;
+        var hasChildren = snapshot.ExtensionCount > 0;
+        var expanded = _expanded.Contains(snapshot.Key);
+        var toggle = line.GetNode<Button>("Toggle");
+        toggle.Visible = hasChildren;
+        toggle.GetNode<ExpandArrow>("Arrow").SetExpanded(expanded);
+        toggle.SetMeta("fmp_parent", snapshot.Key);
+
+        var count = line.GetNode<Label>("Count");
+        count.Visible = hasChildren;
+        count.Text = hasChildren ? string.Format(PanelCopy.ExtensionsLabel, snapshot.ExtensionCount) : "";
+    }
+
+    private static string SubtitleTooltip(RowSnapshot snapshot)
+    {
+        var reasons = RowTooltip(snapshot);
+        return string.IsNullOrEmpty(reasons) ? snapshot.Subtitle : snapshot.Subtitle + "\n" + reasons;
     }
 
     private static void ApplyRail(NModMenuRow row, bool show, float baseLeft)
@@ -559,7 +649,7 @@ internal sealed class VanillaModListDriver : Node
 
     private static Label MakeSubtitle(NModMenuRow row)
     {
-        var label = MakeLabel("", Dim, 14);
+        var label = MakeLabel("", Dim, SubtitleFontSize);
         label.Name = "FullModPanelSubtitle";
         label.AnchorLeft = 0;
         label.AnchorRight = 1;
@@ -567,9 +657,11 @@ internal sealed class VanillaModListDriver : Node
         label.AnchorBottom = 1;
         label.OffsetLeft = 2;
         label.OffsetRight = -150;
-        label.OffsetTop = -22;
+        label.OffsetTop = -SubtitleBand + 2;
         label.OffsetBottom = -2;
         label.ClipContents = true;
+        label.ClipText = true;
+        label.TextOverrunBehavior = TextServer.OverrunBehavior.TrimEllipsis;
         label.MouseFilter = Control.MouseFilterEnum.Pass;
         row.AddChild(label);
         return label;
@@ -588,15 +680,61 @@ internal sealed class VanillaModListDriver : Node
         }
     }
 
-    private static float TextWidth(string text, int fontSize)
+    private HBoxContainer MakeTitleRow(NModMenuRow row, Control vanillaTitle)
     {
-        var width = 0f;
-        foreach (var ch in text)
+        var line = new HBoxContainer
         {
-            width += ch > 127 ? fontSize : fontSize * 0.55f;
-        }
+            Name = TitleRowName,
+            MouseFilter = Control.MouseFilterEnum.Pass,
+        };
+        line.AddThemeConstantOverride("separation", 10);
+        line.AnchorLeft = 0;
+        line.AnchorTop = 0;
+        line.AnchorRight = 1;
+        line.AnchorBottom = 1;
+        row.AddChild(line);
 
-        return width;
+        var text = MakeLabel("", Cream, TitleFontSize);
+        text.Name = "Text";
+        text.SizeFlagsHorizontal = Control.SizeFlags.ExpandFill;
+        text.SizeFlagsVertical = Control.SizeFlags.ShrinkCenter;
+        text.VerticalAlignment = VerticalAlignment.Center;
+        text.ClipText = true;
+        text.TextOverrunBehavior = TextServer.OverrunBehavior.TrimEllipsis;
+        text.MouseFilter = Control.MouseFilterEnum.Pass;
+        var titleFont = vanillaTitle.GetThemeFont("normal_font") ?? UiFont();
+        if (titleFont is not null)
+        {
+            text.AddThemeFontOverride("font", titleFont);
+        }
+        line.AddChild(text);
+
+        var toggle = new Button
+        {
+            Name = "Toggle",
+            Flat = true,
+            CustomMinimumSize = new Vector2(28, 28),
+            SizeFlagsHorizontal = Control.SizeFlags.ShrinkBegin,
+            SizeFlagsVertical = Control.SizeFlags.ShrinkCenter,
+            MouseFilter = Control.MouseFilterEnum.Stop,
+        };
+        var arrow = new ExpandArrow { Name = "Arrow" };
+        toggle.AddChild(arrow);
+        toggle.Connect(Control.SignalName.MouseEntered, Callable.From(() => arrow.SetColor(Cream)));
+        toggle.Connect(Control.SignalName.MouseExited, Callable.From(() => arrow.SetColor(Gold)));
+        var captured = toggle;
+        toggle.Connect(Button.SignalName.Pressed, Callable.From(() => OnExtensionPressed(captured)));
+        line.AddChild(toggle);
+
+        var count = MakeLabel("", Dim, ExtensionCountFontSize);
+        count.Name = "Count";
+        count.SizeFlagsHorizontal = Control.SizeFlags.ShrinkBegin;
+        count.SizeFlagsVertical = Control.SizeFlags.ShrinkCenter;
+        count.VerticalAlignment = VerticalAlignment.Center;
+        count.MouseFilter = Control.MouseFilterEnum.Pass;
+        line.AddChild(count);
+
+        return line;
     }
 
     private static Color FromHex(string hex)
@@ -741,11 +879,11 @@ internal sealed class VanillaModListDriver : Node
         var button = new Button
         {
             Text = text,
-            CustomMinimumSize = new Vector2(0, 26),
+            CustomMinimumSize = new Vector2(0, 32),
             SizeFlagsHorizontal = Control.SizeFlags.ShrinkEnd,
             SizeFlagsVertical = Control.SizeFlags.ShrinkCenter,
         };
-        button.AddThemeFontSizeOverride("font_size", 13);
+        button.AddThemeFontSizeOverride("font_size", ButtonFontSize);
         button.AddThemeColorOverride("font_color", Cream);
         button.AddThemeColorOverride("font_hover_color", Cream);
         button.AddThemeColorOverride("font_pressed_color", Cream);
@@ -768,7 +906,7 @@ internal sealed class VanillaModListDriver : Node
         field.AddThemeColorOverride("font_color", Cream);
         field.AddThemeColorOverride("font_placeholder_color", Dim);
         field.AddThemeColorOverride("caret_color", Cream);
-        field.AddThemeFontSizeOverride("font_size", 15);
+        field.AddThemeFontSizeOverride("font_size", SearchFontSize);
         if (UiFont() is { } font)
         {
             field.AddThemeFontOverride("font", font);

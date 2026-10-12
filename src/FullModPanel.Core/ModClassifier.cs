@@ -161,51 +161,58 @@ public static partial class ModClassifier
         return (bigWithoutWorkshop, fallback);
     }
 
-    public static bool MatchesQuery(string? query, ModFacts facts) =>
-        MatchesQuery(query, facts.InGameName, facts.Id, facts.WorkshopTitle);
-
-    public static bool MatchesQuery(string? query, string inGameName, string? id, string? workshopTitle)
+    /// <summary>
+    /// Matches the two lines the row shows. Hidden fields such as the id and the
+    /// description are not searched, so a query like "m" only hits visible text.
+    /// </summary>
+    public static bool MatchesQuery(string? query, ModFacts facts)
     {
-        if (string.IsNullOrWhiteSpace(query))
+        var (title, subtitle) = DisplayLines(facts);
+        return MatchesQuery(query, title, subtitle);
+    }
+
+    public static bool MatchesQuery(string? query, string title, string subtitle)
+    {
+        var needle = Pinyin.Normalize(query);
+        if (needle.Length == 0)
         {
             return true;
         }
 
-        var needle = query.Trim();
-        if (inGameName.Contains(needle, StringComparison.OrdinalIgnoreCase))
+        if (Pinyin.Normalize(title).Contains(needle, StringComparison.Ordinal)
+            || Pinyin.Normalize(subtitle).Contains(needle, StringComparison.Ordinal))
         {
             return true;
         }
 
-        if (!string.IsNullOrEmpty(id) && id.Contains(needle, StringComparison.OrdinalIgnoreCase))
+        if (!Pinyin.IsPinyinQuery(needle))
         {
-            return true;
+            return false;
         }
 
-        return !string.IsNullOrWhiteSpace(workshopTitle)
-            && workshopTitle.Contains(needle, StringComparison.OrdinalIgnoreCase);
+        return Pinyin.Matches(needle, title) || Pinyin.Matches(needle, subtitle);
     }
 
     private static (ModGroup Group, string Reason) AssignGroup(ModFacts mod, bool dependedUpon)
     {
         if (KnownLibraryIds.Contains(mod.Id))
         {
-            return (ModGroup.Library, "已知依赖库");
+            return (ModGroup.Library, PanelCopy.ReasonKnownLibrary);
         }
 
         if (LooksLikeLibrary(mod.Id, mod.Name) && !HasContentTag(mod))
         {
-            return (ModGroup.Library, "名称或 id 像依赖库，且没有内容类工坊标签");
+            return (ModGroup.Library, PanelCopy.ReasonLooksLikeLibrary);
         }
 
         if (dependedUpon && HasToolsAndApis(mod))
         {
-            return (ModGroup.Library, "有其他模组依赖它，且带有 Tools & APIs");
+            return (ModGroup.Library, PanelCopy.ReasonDependedUponTools);
         }
 
         return mod.AffectsGameplay
-            ? (ModGroup.Gameplay, "affects_gameplay 未关闭")
-            : (ModGroup.LocalOnly, "affects_gameplay 为 false");
+            ? (ModGroup.Gameplay, PanelCopy.ReasonAffectsGameplay)
+            : (ModGroup.LocalOnly, PanelCopy.ReasonNoAffectsGameplay);
     }
 
     private static ModKind InferKind(ModFacts mod, ModGroup group)

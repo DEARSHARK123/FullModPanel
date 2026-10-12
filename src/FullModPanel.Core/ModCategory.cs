@@ -42,9 +42,9 @@ public static class ModGroupDisplay
 
     public static string Name(ModGroup group) => group switch
     {
-        ModGroup.Library => "依赖库",
-        ModGroup.Gameplay => "角色 / 玩法 / 内容",
-        ModGroup.LocalOnly => "皮肤",
+        ModGroup.Library => PanelCopy.LibraryGroup,
+        ModGroup.Gameplay => PanelCopy.GameplayGroup,
+        ModGroup.LocalOnly => PanelCopy.LocalOnlyGroup,
     };
 
     public static string ColorHex(ModGroup group) => group switch

@@ -71,19 +71,19 @@ public sealed class ModPanelSession
     {
         if (Find(key) is null)
         {
-            return "找不到这个模组。";
+            return PanelCopy.ModNotFound;
         }
 
         var rows = Build("").Blocks.SelectMany(block => block.Rows).ToList();
         var row = rows.FirstOrDefault(candidate => candidate.Key == key);
         if (row is null)
         {
-            return "找不到这个模组。";
+            return PanelCopy.ModNotFound;
         }
 
         if (!row.CanPersist)
         {
-            return "该模组缺少 Manifest ID，无法保存设置。";
+            return PanelCopy.MissingManifestId;
         }
 
         var targets = new List<RowSnapshot> { row };
@@ -151,7 +151,7 @@ public sealed class ModPanelSession
             return error;
         }
 
-        return skipped > 0 ? "有模组缺少 manifest id，已跳过。" : null;
+        return skipped > 0 ? PanelCopy.SkippedMissingManifestId : null;
     }
 
     private PanelSnapshot Build(string query)
@@ -160,7 +160,7 @@ public sealed class ModPanelSession
         var visible = new List<ClassifiedMod>();
         foreach (var item in classified)
         {
-            if (ModClassifier.MatchesQuery(query, item.Facts))
+            if (ModClassifier.MatchesQuery(query, item.Title, item.Subtitle))
             {
                 visible.Add(item);
             }
@@ -321,7 +321,7 @@ public sealed class ModPanelSession
 
         if (!_store.TryApply(changes, out var error))
         {
-            return error ?? "保存设置失败，请重试。";
+            return error ?? PanelCopy.SaveFailed;
         }
 
         var updated = changes.ToDictionary(change => change.Key, change => change.Enabled);

@@ -376,14 +376,69 @@ public class ClassifierTests
     }
 
     [Fact]
-    public void SearchMatchesWorkshopTitleManifestNameAndIdButNotDescription()
+    public void SearchMatchesOnlyTheVisibleTitleAndSubtitle()
     {
         var mod = Sample("HextechRunesSponsorPack", "清单名", workshopTitle: "工坊标题", description: "只有简介里的稀有词");
         Assert.True(ModClassifier.MatchesQuery("工坊", mod));
         Assert.True(ModClassifier.MatchesQuery("清单", mod));
-        Assert.True(ModClassifier.MatchesQuery("sponsor", mod));
+        // The id is not shown when a workshop title is shown, so it is not searched.
+        Assert.False(ModClassifier.MatchesQuery("sponsor", mod));
         Assert.False(ModClassifier.MatchesQuery("稀有词", mod));
         Assert.True(ModClassifier.MatchesQuery("  ", mod));
+    }
+
+    [Fact]
+    public void SingleLetterMatchesVisibleTextOnly()
+    {
+        // The id "CrossVersionCompat" contains an m, but no visible line does.
+        var mod = Sample("CrossVersionCompat", "CVC-跨版本兼容补丁", workshopTitle: "CVC-跨版本兼容补丁");
+        Assert.False(ModClassifier.MatchesQuery("m", mod));
+
+        var visible = Sample("MpLib", "MpLib", workshopTitle: "MpLib");
+        Assert.True(ModClassifier.MatchesQuery("m", visible));
+    }
+
+    [Theory]
+    [InlineData("haikesi")]
+    [InlineData("HAIKESI")]
+    [InlineData("hai ke si")]
+    [InlineData("hks")]
+    [InlineData("haiks")]
+    [InlineData("hkesi")]
+    public void PinyinFindsChineseTitles(string query)
+    {
+        var mod = Sample("HextechRunes", "Hextech Mayhem / 海克斯大乱斗", workshopTitle: "海克斯大乱斗");
+        Assert.True(ModClassifier.MatchesQuery(query, mod));
+    }
+
+    [Theory]
+    [InlineData("xinsanguo")]
+    [InlineData("xsg")]
+    public void PinyinFindsNewThreeKingdoms(string query)
+    {
+        var mod = Sample("newsanguo", "新三国", workshopTitle: "新三国");
+        Assert.True(ModClassifier.MatchesQuery(query, mod));
+    }
+
+    [Fact]
+    public void PinyinDoesNotMatchUnrelatedTitlesOrSyllablesOutOfOrder()
+    {
+        var hextech = Sample("HextechRunes", "Hextech Mayhem / 海克斯大乱斗", workshopTitle: "海克斯大乱斗");
+        // Syllables must be read in order: hai, ke, si.
+        Assert.True(ModClassifier.MatchesQuery("kesi", hextech));
+        Assert.False(ModClassifier.MatchesQuery("haisi", hextech));
+        Assert.False(ModClassifier.MatchesQuery("sikehai", hextech));
+
+        var autoAnthony = Sample("AutoAnthony", "Auto-Anthonyology", workshopTitle: "东尼算法 Auto-Anthonyology");
+        Assert.False(ModClassifier.MatchesQuery("haikesi", autoAnthony));
+    }
+
+    [Fact]
+    public void SingleLetterIsNotPinyinSearch()
+    {
+        // "k" would otherwise match every character whose reading starts with k.
+        var hextech = Sample("HextechRunes", "Hextech Mayhem / 海克斯大乱斗", workshopTitle: "海克斯大乱斗");
+        Assert.False(ModClassifier.MatchesQuery("k", hextech));
     }
 
     private static ClassifiedMod Of(IReadOnlyList<ClassifiedMod> mods, string id) =>

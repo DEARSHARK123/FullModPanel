@@ -42,25 +42,6 @@ public interface IModEnableStore
     bool TryApply(IReadOnlyList<ModEnableChange> changes, out string? error);
 }
 
-public static class PanelCopy
-{
-    public const string SearchPlaceholder = "搜索模组名称或工坊标题...";
-
-    public const string SelectAll = "全选";
-
-    public const string Invert = "反选";
-
-    public const string GroupScopeHint = "只作用于本组";
-
-    public const string VisibleScopeHint = "只作用于当前搜索结果";
-
-    public const string ExtensionsLabel = "{0} 个扩展";
-
-    public const string ExtendsFormat = "扩展自 {0}";
-
-    public const string NoHits = "未找到匹配的模组";
-}
-
 /// <summary>
 /// A user override for one manifest id. Group is never overridable.
 /// <see cref="ParentSpecified"/> with a null <see cref="ParentId"/> clears attachment

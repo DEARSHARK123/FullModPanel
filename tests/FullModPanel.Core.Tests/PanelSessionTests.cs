@@ -27,13 +27,17 @@ public class PanelSessionTests
     }
 
     [Fact]
-    public void SearchByIdKeepsThePlaceholderAndDropsDescriptionOnlyHits()
+    public void SearchUsesVisibleLinesAndDropsDescriptionAndHiddenIdHits()
     {
         var session = Session(Mod("HextechRunesSponsorPack", "清单名", workshopTitle: "工坊标题", description: "稀有词"));
         session.SetQuery("稀有词");
         Assert.True(session.Snapshot().NoHits);
 
+        // The id is hidden once a workshop title is shown.
         session.SetQuery("Sponsor");
+        Assert.True(session.Snapshot().NoHits);
+
+        session.SetQuery("工坊");
         var row = Assert.Single(Assert.Single(session.Snapshot().Blocks).Rows);
         Assert.Equal("HextechRunesSponsorPack", row.Key.Split(':', 2)[1]);
         Assert.Equal("搜索模组名称或工坊标题...", PanelCopy.SearchPlaceholder);
@@ -41,7 +45,7 @@ public class PanelSessionTests
         Assert.Equal("反选", PanelCopy.Invert);
         Assert.Equal("只作用于本组", PanelCopy.GroupScopeHint);
         Assert.Equal("只作用于当前搜索结果", PanelCopy.VisibleScopeHint);
-        Assert.Equal("{0} 个扩展", PanelCopy.ExtensionsLabel);
+        Assert.Equal("（{0} 个扩展）", PanelCopy.ExtensionsLabel);
         Assert.Equal("扩展自 {0}", PanelCopy.ExtendsFormat);
         Assert.Equal("未找到匹配的模组", PanelCopy.NoHits);
     }
@@ -167,6 +171,22 @@ public class PanelSessionTests
     }
 
     [Fact]
+    public void PinyinSearchKeepsTheHextechBodyAndItsPack()
+    {
+        var session = Session(
+            Mod("HextechRunes", "Hextech Mayhem / 海克斯大乱斗", workshopTitle: "海克斯大乱斗", tags: ["Relics"]),
+            Mod("HextechRunesSponsorPack", "海克斯大乱斗：额外拓展包", workshopTitle: "海克斯大乱斗：额外拓展包", tags: ["Relics"]),
+            Mod("MomoLib", workshopTitle: "MomoLib", tags: ["mod"]));
+
+        session.SetQuery("haikesi");
+        var rows = Assert.Single(session.Snapshot().Blocks).Rows;
+        Assert.Equal(["HextechRunes", "HextechRunesSponsorPack"], rows.Select(row => IdOf(row.Key)).ToArray());
+
+        session.SetQuery("hks");
+        Assert.Equal(2, Assert.Single(session.Snapshot().Blocks).Rows.Count);
+    }
+
+    [Fact]
     public void GensokyoStaysBesideMomoLibAndChimeraStaysUnderAutoAnthony()
     {
         var session = Session(
@@ -231,6 +251,64 @@ public class PanelSessionTests
         Assert.True(ModKeys.TryParse(key, out var origin, out var id));
         Assert.Equal(ModOrigin.SteamWorkshop, origin);
         Assert.Equal("author:pack", id);
+    }
+
+    [Fact]
+    public void EnglishLanguageSwapsEveryPanelString()
+    {
+        var previous = PanelCopy.Language;
+        PanelCopy.Language = PanelLanguage.English;
+        try
+        {
+            Assert.Equal("Search mod name or Workshop title...", PanelCopy.SearchPlaceholder);
+            Assert.Equal("Select all", PanelCopy.SelectAll);
+            Assert.Equal("Invert", PanelCopy.Invert);
+            Assert.Equal("Only affects this group", PanelCopy.GroupScopeHint);
+            Assert.Equal("Only affects the current search results", PanelCopy.VisibleScopeHint);
+            Assert.Equal("({0} extension(s))", PanelCopy.ExtensionsLabel);
+            Assert.Equal("Extends {0}", PanelCopy.ExtendsFormat);
+            Assert.Equal("No matching mods found", PanelCopy.NoHits);
+            Assert.Equal("Loading Workshop info…", PanelCopy.Loading);
+            Assert.Equal("Libraries", ModGroupDisplay.Name(ModGroup.Library));
+            Assert.Equal("Characters / Gameplay / Content", ModGroupDisplay.Name(ModGroup.Gameplay));
+            Assert.Equal("Cosmetics", ModGroupDisplay.Name(ModGroup.LocalOnly));
+        }
+        finally
+        {
+            PanelCopy.Language = previous;
+        }
+    }
+
+    [Fact]
+    public void EnglishLanguageReachesBlocksReasonsAndErrors()
+    {
+        var previous = PanelCopy.Language;
+        PanelCopy.Language = PanelLanguage.English;
+        try
+        {
+            var session = Session(Mod("A", "界面甲", affectsGameplay: false, enabled: false));
+            session.SetQuery("界面");
+            var block = Assert.Single(session.Snapshot().Blocks);
+            Assert.Equal("Cosmetics", block.DisplayName);
+            var row = Assert.Single(block.Rows);
+            Assert.Contains("affects_gameplay is false", row.Reasons);
+
+            Assert.Equal("Mod not found.", session.TrySet("missing", true));
+
+            session.SetQuery("不存在的名字");
+            Assert.True(session.Snapshot().NoHits);
+        }
+        finally
+        {
+            PanelCopy.Language = previous;
+        }
+    }
+
+    [Fact]
+    public void ChineseIsTheDefaultLanguage()
+    {
+        Assert.Equal(PanelLanguage.Chinese, PanelCopy.Language);
+        Assert.Equal("皮肤", ModGroupDisplay.Name(ModGroup.LocalOnly));
     }
 
     private static string IdOf(string key) => key[(key.IndexOf(':') + 1)..];

@@ -142,7 +142,7 @@ internal sealed class Sts2EnableStore : IModEnableStore
             var save = SaveManager.Instance.SettingsSave;
             if (save is null)
             {
-                error = "游戏设置尚未就绪，请稍后重试。";
+                error = PanelCopy.GameSettingsNotReady;
                 return false;
             }
 
@@ -159,14 +159,14 @@ internal sealed class Sts2EnableStore : IModEnableStore
             {
                 if (!ModKeys.TryParse(change.Key, out var origin, out var id))
                 {
-                    error = "模组标识符无效。";
+                    error = PanelCopy.InvalidModId;
                     return false;
                 }
 
                 var source = Sts2Origins.ToSource(origin);
                 if (source is null)
                 {
-                    error = "该模组缺少 Manifest ID，无法保存设置。";
+                    error = PanelCopy.MissingManifestId;
                     return false;
                 }
 
@@ -177,7 +177,7 @@ internal sealed class Sts2EnableStore : IModEnableStore
                     created = ModManager.Mods.FirstOrDefault(mod => mod.manifest?.id == id && mod.modSource == source.Value);
                     if (created?.manifest?.id is null)
                     {
-                        error = $"未找到模组 {id}。";
+                        error = string.Format(PanelCopy.ModIdNotFound, id);
                         return false;
                     }
                 }
@@ -206,7 +206,7 @@ internal sealed class Sts2EnableStore : IModEnableStore
         catch (Exception ex)
         {
             Log.Error($"FullModPanel failed to save mod settings: {ex}");
-            error = "保存设置失败，请重试。";
+            error = PanelCopy.SaveFailed;
             return false;
         }
     }
